@@ -13,7 +13,16 @@ serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 seahash.workspace = true
+ahash.workspace = true
 rayon.workspace = true
+bloomfilter.workspace = true
+sled.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
+tempfile = "3.8"
+criterion = "0.5"
+
+[[bench]]
+name = "dedup_bench"
+harness = false
