@@ -7,6 +7,10 @@ pub mod error;
 pub mod length_filter;
 pub mod text_preprocessing;
 
+// Phase 5: Quality Filters
+pub mod language;
+pub mod quality;
+
 pub use error::{Error, Result};
 
 #[cfg(test)]
