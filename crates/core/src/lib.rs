@@ -10,6 +10,8 @@ pub mod exact_dedup;
 pub mod hash_storage;
 pub mod minhash;
 pub mod fuzzy_dedup;
+pub mod pipeline;
+pub mod memory;
 
 pub use error::{Error, Result};
 
