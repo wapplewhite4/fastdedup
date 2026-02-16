@@ -8,6 +8,8 @@ pub mod hash;
 pub mod dedup;
 pub mod exact_dedup;
 pub mod hash_storage;
+pub mod minhash;
+pub mod fuzzy_dedup;
 
 pub use error::{Error, Result};
 

@@ -5,6 +5,7 @@
 
 pub mod error;
 pub mod length_filter;
+pub mod text_preprocessing;
 
 pub use error::{Error, Result};
 

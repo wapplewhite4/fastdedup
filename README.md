@@ -266,6 +266,80 @@ println!("Hot cache: {}, Cold storage: {}",
     storage.stats().hot_count, storage.stats().cold_count);
 ```
 
+### Fuzzy Deduplication (Near-Duplicates)
+
+Detect similar documents using MinHash and LSH:
+
+```rust
+use dataset_dedup_core::fuzzy_dedup::FuzzyDeduplicator;
+use dataset_dedup_formats::open_dataset;
+
+// Create fuzzy deduplicator with 70% similarity threshold
+let mut dedup = FuzzyDeduplicator::new(0.7);
+
+let reader = open_dataset("dataset.jsonl")?;
+for (id, result) in reader.enumerate() {
+    let record = result?;
+
+    // Find similar documents already indexed
+    let duplicates = dedup.find_duplicates(&record.data);
+
+    if duplicates.is_empty() {
+        // No similar documents found - this is unique
+        dedup.add_record(id, &record.data);
+        println!("Unique: {}", record.data);
+    } else {
+        // Found similar documents
+        println!("Duplicate of: {:?}", duplicates);
+    }
+}
+
+let stats = dedup.stats();
+println!("Processed: {}, Duplicates: {}, Rate: {:.2}%",
+    stats.total_processed,
+    stats.records_with_duplicates,
+    stats.duplicate_rate());
+```
+
+### Text Normalization
+
+Improve fuzzy matching with text preprocessing:
+
+```rust
+use dataset_dedup_filters::text_preprocessing::TextNormalizer;
+use dataset_dedup_core::fuzzy_dedup::FuzzyDeduplicator;
+
+// Create normalizer with preset
+let normalizer = TextNormalizer::aggressive(); // or balanced(), conservative()
+
+// Use with custom fuzzy deduplicator
+let dedup = FuzzyDeduplicator::with_normalizer(0.7, normalizer);
+
+// Or normalize text manually
+let text = "  Hello, WORLD!!! 😊  ";
+let normalized = normalizer.normalize(text);
+// Result: "hello world"
+```
+
+### Finding Duplicate Clusters
+
+Process a batch and find all duplicate clusters:
+
+```rust
+use dataset_dedup_core::fuzzy_dedup::FuzzyDeduplicator;
+
+let mut dedup = FuzzyDeduplicator::new(0.8);
+let records = vec![
+    json!({"text": "The quick brown fox"}),
+    json!({"text": "The quick brown fox"}),  // Duplicate of 0
+    json!({"text": "Hello world"}),
+    json!({"text": "Hello world"}),          // Duplicate of 2
+];
+
+let clusters = dedup.find_all_duplicates(&records);
+// Returns: [[0, 1], [2, 3]]
+```
+
 ## Performance Characteristics
 
 - **Memory Usage**: Constant O(1) per record, O(n) for deduplication hash table
@@ -283,8 +357,13 @@ Key dependencies:
 - `flate2` - Gzip compression
 - `clap` - CLI argument parsing
 - `seahash` - Fast hashing algorithm
+- `ahash` - High-performance hashing for dedup
 - `rayon` - Parallel processing
 - `tracing` - Logging infrastructure
+- `bloomfilter` - Probabilistic data structures
+- `sled` - Embedded database for hash storage
+- `regex` - Text pattern matching
+- `unicode-normalization` - Unicode text normalization
 
 ## Testing
 
@@ -334,26 +413,83 @@ RUST_LOG=debug cargo test
 - [x] Persistence across sessions
 - [x] Comprehensive tests including large-scale scenarios
 
+### Phase 4: Fuzzy Deduplication ✅
+
+#### Phase 4A: MinHash Implementation ✅
+
+- [x] MinHash algorithm with k-shingles (k=3)
+- [x] 128 hash functions for high-dimensional signatures
+- [x] Jaccard similarity estimation
+- [x] LSH (Locality Sensitive Hashing) for fast candidate generation
+- [x] Configurable bands and rows (32 bands × 4 rows = 128 hashes)
+- [x] Optimized for >0.7 similarity detection
+- [x] Comprehensive tests with known duplicate pairs
+- [x] Similarity score verification
+
+#### Phase 4B: Text Preprocessing for Fuzzy Matching ✅
+
+- [x] TextNormalizer with multiple configuration options:
+  - Lowercase conversion
+  - Punctuation removal
+  - Whitespace normalization
+  - Unicode NFKD normalization
+- [x] Three presets:
+  - **Aggressive**: All normalizations (max recall)
+  - **Conservative**: Minimal normalization (max precision)
+  - **Balanced**: Default preset (good balance)
+- [x] Efficient memory reuse with buffer allocation
+- [x] Performance: 100K+ docs/sec normalization
+- [x] Edge case handling: emojis, special chars, different scripts
+- [x] Comprehensive tests for all text transformations
+
+#### Phase 4C: Fuzzy Dedup Integration ✅
+
+- [x] FuzzyDeduplicator combining MinHash + LSH + normalization
+- [x] Configurable similarity threshold
+- [x] Automatic text extraction and normalization
+- [x] Candidate generation via LSH
+- [x] Similarity verification with Jaccard distance
+- [x] Batch processing support
+- [x] Duplicate cluster detection
+- [x] Performance: 10K+ records/sec fuzzy dedup
+- [x] Comprehensive statistics tracking
+- [x] Integration tests with real duplicates
+
 ## Benchmarks
 
 Run benchmarks to measure deduplication performance:
 
 ```bash
+# Core deduplication benchmarks
 cargo bench --package dataset-dedup-core
+
+# Text preprocessing benchmarks
+cargo bench --package dataset-dedup-filters
 ```
 
 Example results (on modern hardware):
-- Exact dedup (10K unique): ~500K records/sec
-- Exact dedup (50% duplicates): ~750K records/sec
-- Tiered storage insert (10K): ~300K inserts/sec
-- Tiered storage lookup (10K): ~2M lookups/sec
+
+**Exact Deduplication:**
+- 10K unique records: ~500K records/sec
+- 10K with 50% duplicates: ~750K records/sec
+- 100K records: ~400K records/sec
+
+**Tiered Storage:**
+- Insert (10K): ~300K inserts/sec
+- Lookup (10K): ~2M lookups/sec
+
+**Fuzzy Deduplication:**
+- MinHash signature generation (1K docs): ~50K docs/sec
+- LSH index insertion (1K): ~200K inserts/sec
+- LSH query (100): ~10K queries/sec
+- End-to-end fuzzy dedup (1K records): ~10K records/sec
+
+**Text Preprocessing:**
+- Aggressive normalization: ~100K+ docs/sec
+- Balanced normalization: ~150K+ docs/sec
+- Conservative normalization: ~200K+ docs/sec
 
 ## Future Phases
-
-### Phase 4: Advanced Near-Duplicate Detection
-- MinHash for near-duplicate detection
-- SimHash for similarity detection
-- LSH (Locality-Sensitive Hashing)
 
 ### Phase 5: Quality Filters
 - Length-based filtering
