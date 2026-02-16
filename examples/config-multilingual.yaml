@@ -1,0 +1,48 @@
+# Multilingual Pipeline Configuration
+# Supports multiple languages with lenient quality filters
+
+input:
+  path: "multilingual_dataset.jsonl"
+  format: jsonl
+
+output:
+  path: "multilingual_clean.jsonl"
+  format: jsonl
+  compression: gzip
+
+deduplication:
+  exact:
+    field: "text"
+    normalize: true
+  fuzzy:
+    threshold: 0.8      # Slightly lower threshold for multilingual
+    field: "text"
+
+filters:
+  language:
+    allowed_languages:
+      - "eng"           # English
+      - "spa"           # Spanish
+      - "fra"           # French
+      - "deu"           # German
+      - "rus"           # Russian
+      - "por"           # Portuguese
+      - "ita"           # Italian
+      - "jpn"           # Japanese
+      - "zho"           # Chinese
+      - "ara"           # Arabic
+    confidence_threshold: 0.6
+    min_text_length: 50
+
+  quality:
+    min_length: 50
+    max_length: 20000
+    min_word_count: 10
+    max_word_count: 5000
+    max_repetition_ratio: 0.4
+    min_unique_words_ratio: 0.2
+    max_url_ratio: 0.15
+    max_special_char_ratio: 0.4
+    reject_html: true
+    filter_profanity: false
+    min_avg_word_length: 2.0
