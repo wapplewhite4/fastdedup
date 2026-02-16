@@ -54,3 +54,7 @@ bloomfilter = "1.0"
 
 # Embedded database
 sled = "0.34"
+
+# Text processing
+regex = "1.10"
+unicode-normalization = "0.1"

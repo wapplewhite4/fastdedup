@@ -12,6 +12,13 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 rayon.workspace = true
+regex.workspace = true
+unicode-normalization.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
+criterion = "0.5"
+
+[[bench]]
+name = "text_bench"
+harness = false
