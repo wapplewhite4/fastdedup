@@ -1,0 +1,39 @@
+# Example Pipeline Configuration (TOML)
+# Dataset Deduplication Tool
+
+[input]
+path = "raw_dataset.jsonl.gz"
+format = "jsonl"
+
+[output]
+path = "clean_dataset.jsonl"
+format = "jsonl"
+compression = "none"  # Options: "none", "gzip", "zstd"
+
+# Deduplication settings
+[deduplication.exact]
+field = "text"        # Field to use for hashing
+normalize = true      # Normalize text before hashing
+
+[deduplication.fuzzy]
+threshold = 0.85      # Similarity threshold (0.0-1.0)
+field = "text"        # Field to compare
+
+# Quality filters
+[filters.language]
+allowed_languages = ["eng"]  # English only
+confidence_threshold = 0.7
+min_text_length = 50
+
+[filters.quality]
+min_length = 100
+max_length = 10000
+min_word_count = 20
+max_word_count = 2000
+max_repetition_ratio = 0.3
+min_unique_words_ratio = 0.3
+max_url_ratio = 0.1
+max_special_char_ratio = 0.3
+reject_html = true
+filter_profanity = false
+min_avg_word_length = 2.5

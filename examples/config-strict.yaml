@@ -1,0 +1,39 @@
+# Strict Quality Pipeline Configuration
+# High-quality datasets only - aggressive filtering
+
+input:
+  path: "raw_dataset.jsonl"
+  format: jsonl
+
+output:
+  path: "high_quality_dataset.jsonl"
+  format: jsonl
+  compression: gzip
+
+deduplication:
+  exact:
+    field: "text"
+    normalize: true
+  fuzzy:
+    threshold: 0.9      # Very strict - only near-identical matches
+    field: "text"
+
+filters:
+  language:
+    allowed_languages:
+      - "eng"           # English only
+    confidence_threshold: 0.8  # High confidence required
+    min_text_length: 100
+
+  quality:
+    min_length: 200          # Longer minimum
+    max_length: 5000         # Shorter maximum
+    min_word_count: 40       # More words required
+    max_word_count: 1000
+    max_repetition_ratio: 0.2   # Less repetition allowed
+    min_unique_words_ratio: 0.5  # High vocabulary diversity
+    max_url_ratio: 0.05         # Very few URLs
+    max_special_char_ratio: 0.2  # Fewer special characters
+    reject_html: true
+    filter_profanity: true      # Enable profanity filter
+    min_avg_word_length: 3.5    # Longer average word length
