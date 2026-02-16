@@ -15,6 +15,11 @@ rayon.workspace = true
 regex.workspace = true
 unicode-normalization.workspace = true
 
+# Phase 5: Quality Filters
+whatlang.workspace = true
+rustrict.workspace = true
+bincode.workspace = true
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 criterion = "0.5"
