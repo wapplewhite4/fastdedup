@@ -44,6 +44,13 @@ parquet = "53.3"
 
 # Hashing
 seahash = "4.1"
+ahash = "0.8"
 
 # Progress tracking
 indicatif = "0.17"
+
+# Bloom filter
+bloomfilter = "1.0"
+
+# Embedded database
+sled = "0.34"

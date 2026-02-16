@@ -6,6 +6,8 @@
 pub mod error;
 pub mod hash;
 pub mod dedup;
+pub mod exact_dedup;
+pub mod hash_storage;
 
 pub use error::{Error, Result};
 
