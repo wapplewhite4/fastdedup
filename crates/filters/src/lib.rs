@@ -1,0 +1,17 @@
+//! Quality filters for dataset cleaning
+//!
+//! This crate provides various filters for cleaning and validating
+//! dataset records based on quality metrics.
+
+pub mod error;
+pub mod length_filter;
+
+pub use error::{Error, Result};
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn it_works() {
+        assert_eq!(2 + 2, 4);
+    }
+}
