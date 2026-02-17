@@ -71,10 +71,13 @@ impl Default for FuzzyDedupConfig {
         Self {
             similarity_threshold: 0.7,
             num_hashes: 128,
-            shingle_size: 2, // word bigrams by default
-            word_shingles: true,
-            num_bands: 32,
-            rows_per_band: 4,
+            shingle_size: 3, // character trigrams (matches Python datasketch default)
+            word_shingles: false,
+            // 16 bands × 8 rows = 128 hashes
+            // vs naive 32×4: FP rate drops from ~5% → 0.0004% at s=0.2
+            // TP rate at s=0.8: ~95% (vs ~100% for 32×4) — acceptable tradeoff
+            num_bands: 16,
+            rows_per_band: 8,
             text_field: "text".to_string(),
         }
     }
