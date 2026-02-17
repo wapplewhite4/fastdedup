@@ -132,6 +132,80 @@ impl FuzzyDeduplicator {
             .map(|s| s.to_string())
     }
 
+    /// Process a record and add it if it's not a duplicate
+    ///
+    /// This is more efficient than calling find_duplicates + add_record
+    /// because it only computes the MinHash signature once.
+    ///
+    /// # Arguments
+    /// * `id` - Unique identifier for this record
+    /// * `record` - The record to process
+    ///
+    /// # Returns
+    /// * `Some(duplicates)` - If duplicates found, returns their IDs
+    /// * `None` - If no duplicates (record was added to index)
+    pub fn process_record(&mut self, id: usize, record: &Value) -> Option<Vec<usize>> {
+        self.stats.total_processed += 1;
+
+        // 1. Extract text field
+        let text = match self.extract_text(record) {
+            Some(t) => t,
+            None => {
+                debug!("Record missing text field '{}'", self.config.text_field);
+                return None;
+            }
+        };
+
+        // 2. Normalize text
+        let normalized_text = self.normalizer.normalize(&text);
+
+        if normalized_text.is_empty() {
+            debug!("Record normalized to empty text");
+            return None;
+        }
+
+        // 3. Compute MinHash signature ONCE
+        let signature = self.minhash.compute_signature(&normalized_text);
+
+        // 4. Query LSH index for candidates
+        let candidates = self.lsh_index.query(&signature, self.config.similarity_threshold);
+
+        if candidates.is_empty() {
+            // No duplicates found - add to index
+            self.lsh_index.insert(id, signature);
+            debug!("Added record {} to fuzzy dedup index", id);
+            return None;
+        }
+
+        // 5. Verify with Jaccard similarity
+        let mut duplicates = Vec::new();
+
+        for &candidate_id in &candidates {
+            self.stats.lsh_candidates_checked += 1;
+
+            if let Some(candidate_sig) = self.lsh_index.get_signature(candidate_id) {
+                let similarity = signature.jaccard_similarity(candidate_sig);
+
+                if similarity >= self.config.similarity_threshold {
+                    duplicates.push(candidate_id);
+                    self.stats.verified_duplicates += 1;
+                }
+            }
+        }
+
+        if !duplicates.is_empty() {
+            self.stats.records_with_duplicates += 1;
+            self.stats.total_duplicates_found += duplicates.len();
+            duplicates.sort_unstable();
+            Some(duplicates)
+        } else {
+            // LSH gave false positives - add to index
+            self.lsh_index.insert(id, signature);
+            debug!("Added record {} to fuzzy dedup index (no verified duplicates)", id);
+            None
+        }
+    }
+
     /// Find duplicate IDs for a given record
     ///
     /// Returns a list of document IDs that are similar above the threshold.

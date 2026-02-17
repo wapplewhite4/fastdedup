@@ -388,10 +388,11 @@ async fn fuzzy_dedup(
         let record = result?;
         total += 1;
 
-        let dups = deduplicator.find_duplicates(&record.data);
+        // Use process_record() which computes MinHash signature only once
+        let dups = deduplicator.process_record(total, &record.data);
 
-        if dups.is_empty() {
-            deduplicator.add_record(total, &record.data);
+        if dups.is_none() {
+            // No duplicates found, record was added to index
             unique += 1;
         } else {
             duplicates += 1;
