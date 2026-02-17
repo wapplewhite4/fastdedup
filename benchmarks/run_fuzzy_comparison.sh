@@ -64,7 +64,7 @@ time cargo run --release --package dataset-dedup-cli -- fuzzy-dedup \
     --output "$OUTPUT_DIR/rust_fuzzy_output.parquet" \
     --field text \
     --threshold $THRESHOLD \
-    --num-perm $NUM_PERM
+    --num-hashes $NUM_PERM
 echo ""
 
 echo "=========================================="
