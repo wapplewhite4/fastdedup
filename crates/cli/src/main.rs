@@ -9,7 +9,9 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
 use rayon::prelude::*;
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::{BufWriter, Write};
+use std::path::{Path, PathBuf};
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
@@ -340,6 +342,20 @@ async fn exact_dedup(
     Ok(())
 }
 
+/// Derive the companion "removed records" path from the clean output path.
+///
+/// Examples:
+///   output.jsonl   → output.removed.jsonl
+///   output.parquet → output.removed.jsonl
+fn removed_path(output: &Path) -> PathBuf {
+    let stem = output
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy();
+    let parent = output.parent().unwrap_or_else(|| Path::new("."));
+    parent.join(format!("{}.removed.jsonl", stem))
+}
+
 async fn fuzzy_dedup(
     input: PathBuf,
     output: PathBuf,
@@ -356,6 +372,7 @@ async fn fuzzy_dedup(
 ) -> Result<()> {
     use dataset_dedup_core::fuzzy_dedup::{FuzzyDeduplicator, FuzzyDedupConfig};
     use dataset_dedup_formats::open_dataset;
+    use serde_json::Value;
 
     // Resolve LSH band parameters.
     // Default 16 bands × 8 rows = 128 hashes.
@@ -400,6 +417,25 @@ async fn fuzzy_dedup(
     let mut unique = 0;
     let mut duplicates = 0;
 
+    // Open output writers unless this is a dry-run or stats-only pass.
+    //
+    // clean_writer  → the path the user specified (JSONL, one record per line)
+    // removed_writer → auto-derived <stem>.removed.jsonl; each record gets an
+    //                  extra `__duplicate_of` field listing the index(es) of the
+    //                  first-seen record(s) it matched, for QA inspection.
+    let write_output = !dry_run && !stats_only;
+    let removed_output = removed_path(&output);
+
+    let mut clean_writer: Option<BufWriter<File>> = None;
+    let mut removed_writer: Option<BufWriter<File>> = None;
+
+    if write_output {
+        clean_writer = Some(BufWriter::new(File::create(&output)?));
+        removed_writer = Some(BufWriter::new(File::create(&removed_output)?));
+        info!("  Clean output:   {:?}", output);
+        info!("  Removed output: {:?}", removed_output);
+    }
+
     // Use record-based progress if available (Parquet), otherwise bytes
     let progress = if let Some(total_records) = reader.total_records() {
         ProgressReporter::new_record_based(total_records)
@@ -435,21 +471,48 @@ async fn fuzzy_dedup(
         // Serial phase: LSH query + insert (order matters for dedup correctness)
         for (record, sig_opt) in batch.into_iter().zip(signatures) {
             total += 1;
-            let _ = record; // record data only needed for signature (already computed)
 
             let dups = match sig_opt {
                 Some(sig) => deduplicator.process_prepared(total, sig),
-                None => None, // missing/empty text field
+                None => None, // missing/empty text field — treat as unique
             };
 
-            if dups.is_none() {
-                unique += 1;
-            } else {
-                duplicates += 1;
+            match dups {
+                None => {
+                    unique += 1;
+                    if let Some(ref mut w) = clean_writer {
+                        writeln!(w, "{}", serde_json::to_string(&record.data)?)?;
+                    }
+                }
+                Some(ref dup_ids) => {
+                    duplicates += 1;
+                    if let Some(ref mut w) = removed_writer {
+                        // Clone the record and annotate it with which original(s) it
+                        // matched so reviewers know exactly why it was removed.
+                        let mut annotated = record.data.clone();
+                        if let Value::Object(ref mut map) = annotated {
+                            let ids: Vec<Value> = dup_ids
+                                .iter()
+                                .map(|id| Value::Number((*id).into()))
+                                .collect();
+                            map.insert("__duplicate_of".to_string(), Value::Array(ids));
+                        }
+                        writeln!(w, "{}", serde_json::to_string(&annotated)?)?;
+                    }
+                }
             }
         }
 
         progress.update(reader.bytes_processed(), total, duplicates, 0);
+    }
+
+    // Flush writers explicitly before printing the summary so any buffered data
+    // is on disk by the time the user sees the "done" message.
+    if let Some(ref mut w) = clean_writer {
+        w.flush()?;
+    }
+    if let Some(ref mut w) = removed_writer {
+        w.flush()?;
     }
 
     progress.finish();
@@ -459,7 +522,8 @@ async fn fuzzy_dedup(
     if json_output {
         let report = serde_json::json!({
             "input": input.to_string_lossy().to_string(),
-            "output": if stats_only { serde_json::Value::Null } else { serde_json::Value::String(output.to_string_lossy().to_string()) },
+            "output": if write_output { serde_json::Value::String(output.to_string_lossy().to_string()) } else { serde_json::Value::Null },
+            "removed_output": if write_output { serde_json::Value::String(removed_output.to_string_lossy().to_string()) } else { serde_json::Value::Null },
             "total_records": total,
             "unique_records": unique,
             "duplicates_removed": duplicates,
@@ -474,12 +538,16 @@ async fn fuzzy_dedup(
     } else {
         progress::print_summary_report(
             &input,
-            if stats_only { None } else { Some(&output) },
+            if write_output { Some(&output) } else { None },
             total,
             unique,
             duplicates,
             0,
         );
+        if write_output {
+            println!("  Removed records: {:?} ({} records with __duplicate_of annotation)",
+                     removed_output, duplicates);
+        }
     }
 
     Ok(())
