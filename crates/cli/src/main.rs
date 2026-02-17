@@ -263,9 +263,13 @@ async fn exact_dedup(
     let mut unique = 0;
     let mut duplicates = 0;
 
-    // Create progress reporter
-    let total_bytes = reader.total_bytes().unwrap_or(0);
-    let progress = ProgressReporter::new(total_bytes);
+    // Use record-based progress if available (Parquet), otherwise bytes
+    let progress = if let Some(total_records) = reader.total_records() {
+        ProgressReporter::new_record_based(total_records)
+    } else {
+        let total_bytes = reader.total_bytes().unwrap_or(0);
+        ProgressReporter::new(total_bytes)
+    };
 
     while let Some(result) = reader.next() {
         let record = result?;
@@ -372,8 +376,13 @@ async fn fuzzy_dedup(
     let mut unique = 0;
     let mut duplicates = 0;
 
-    let total_bytes = reader.total_bytes().unwrap_or(0);
-    let progress = ProgressReporter::new(total_bytes);
+    // Use record-based progress if available (Parquet), otherwise bytes
+    let progress = if let Some(total_records) = reader.total_records() {
+        ProgressReporter::new_record_based(total_records)
+    } else {
+        let total_bytes = reader.total_bytes().unwrap_or(0);
+        ProgressReporter::new(total_bytes)
+    };
 
     while let Some(result) = reader.next() {
         let record = result?;
@@ -388,7 +397,8 @@ async fn fuzzy_dedup(
             duplicates += 1;
         }
 
-        if total % 1000 == 0 {
+        // Update more frequently for fuzzy dedup since MinHash is slow
+        if total % 100 == 0 {
             progress.update(reader.bytes_processed(), total, duplicates, 0);
         }
     }
@@ -462,8 +472,13 @@ async fn apply_filters(
     let mut filtered = 0;
     let mut passed = 0;
 
-    let total_bytes = reader.total_bytes().unwrap_or(0);
-    let progress = ProgressReporter::new(total_bytes);
+    // Use record-based progress if available (Parquet), otherwise bytes
+    let progress = if let Some(total_records) = reader.total_records() {
+        ProgressReporter::new_record_based(total_records)
+    } else {
+        let total_bytes = reader.total_bytes().unwrap_or(0);
+        ProgressReporter::new(total_bytes)
+    };
 
     while let Some(result) = reader.next() {
         let record = result?;
