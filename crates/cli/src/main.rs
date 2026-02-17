@@ -484,18 +484,28 @@ async fn fuzzy_dedup(
                         writeln!(w, "{}", serde_json::to_string(&record.data)?)?;
                     }
                 }
-                Some(ref dup_ids) => {
+                Some(ref dup_matches) => {
                     duplicates += 1;
                     if let Some(ref mut w) = removed_writer {
                         // Clone the record and annotate it with which original(s) it
-                        // matched so reviewers know exactly why it was removed.
+                        // matched and the exact MinHash similarity for each, so
+                        // reviewers can verify why it was removed.
                         let mut annotated = record.data.clone();
                         if let Value::Object(ref mut map) = annotated {
-                            let ids: Vec<Value> = dup_ids
+                            let ids: Vec<Value> = dup_matches
                                 .iter()
-                                .map(|id| Value::Number((*id).into()))
+                                .map(|(id, _)| Value::Number((*id).into()))
+                                .collect();
+                            let scores: Vec<Value> = dup_matches
+                                .iter()
+                                .map(|(_, sim)| {
+                                    // Round to 4 decimal places for readability.
+                                    let rounded = (sim * 10_000.0).round() / 10_000.0;
+                                    serde_json::json!(rounded)
+                                })
                                 .collect();
                             map.insert("__duplicate_of".to_string(), Value::Array(ids));
+                            map.insert("__similarity_scores".to_string(), Value::Array(scores));
                         }
                         writeln!(w, "{}", serde_json::to_string(&annotated)?)?;
                     }

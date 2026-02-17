@@ -321,8 +321,10 @@ impl FuzzyDeduplicator {
 
     /// Process a pre-computed signature against the LSH index (must run serially).
     ///
-    /// Returns Some(duplicate_ids) if duplicates found, None if record was added to index.
-    pub fn process_prepared(&mut self, id: usize, signature: MinHashSignature) -> Option<Vec<usize>> {
+    /// Returns `Some(matches)` if duplicates found, where each element is
+    /// `(matched_id, minhash_similarity)`.  Returns `None` (and inserts into
+    /// the index) when no verified duplicate is found.
+    pub fn process_prepared(&mut self, id: usize, signature: MinHashSignature) -> Option<Vec<(usize, f64)>> {
         self.stats.total_processed += 1;
 
         let candidates = self.lsh_index.query(&signature, self.config.similarity_threshold);
@@ -332,13 +334,13 @@ impl FuzzyDeduplicator {
             return None;
         }
 
-        let mut duplicates = Vec::new();
+        let mut duplicates: Vec<(usize, f64)> = Vec::new();
         for &candidate_id in &candidates {
             self.stats.lsh_candidates_checked += 1;
             if let Some(candidate_sig) = self.lsh_index.get_signature(candidate_id) {
                 let similarity = signature.jaccard_similarity(candidate_sig);
                 if similarity >= self.config.similarity_threshold {
-                    duplicates.push(candidate_id);
+                    duplicates.push((candidate_id, similarity));
                     self.stats.verified_duplicates += 1;
                 }
             }
@@ -347,7 +349,7 @@ impl FuzzyDeduplicator {
         if !duplicates.is_empty() {
             self.stats.records_with_duplicates += 1;
             self.stats.total_duplicates_found += duplicates.len();
-            duplicates.sort_unstable();
+            duplicates.sort_unstable_by_key(|&(id, _)| id);
             Some(duplicates)
         } else {
             self.lsh_index.insert(id, signature);
