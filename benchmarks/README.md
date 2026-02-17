@@ -118,7 +118,7 @@ cargo run --release --package dataset-dedup-cli -- fuzzy-dedup \
     --output benchmarks/output_fuzzy/rust_out.parquet \
     --field text \
     --threshold 0.8 \
-    --num-perm 128
+    --num-hashes 128
 ```
 
 ## Visualizing Results
