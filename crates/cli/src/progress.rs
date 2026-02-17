@@ -10,10 +10,19 @@ pub struct ProgressReporter {
     main_bar: ProgressBar,
     stats_bar: ProgressBar,
     _start_time: Instant,
+    mode: ProgressMode,
+}
+
+/// Progress tracking mode
+enum ProgressMode {
+    /// Track progress by bytes processed
+    Bytes,
+    /// Track progress by records processed
+    Records,
 }
 
 impl ProgressReporter {
-    /// Create a new progress reporter
+    /// Create a new progress reporter tracking bytes
     pub fn new(total_bytes: u64) -> Self {
         let multi = MultiProgress::new();
 
@@ -39,12 +48,51 @@ impl ProgressReporter {
             main_bar,
             stats_bar,
             _start_time: Instant::now(),
+            mode: ProgressMode::Bytes,
         }
     }
 
-    /// Update progress with current statistics
+    /// Create a new progress reporter tracking records
+    pub fn new_record_based(total_records: u64) -> Self {
+        let multi = MultiProgress::new();
+
+        // Main progress bar for records processed
+        let main_bar = multi.add(ProgressBar::new(total_records));
+        main_bar.set_style(
+            ProgressStyle::default_bar()
+                .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {human_pos}/{human_len} ({per_sec}) {msg}")
+                .unwrap()
+                .progress_chars("█▓▒░-"),
+        );
+
+        // Stats bar for duplicates/filtered counts
+        let stats_bar = multi.add(ProgressBar::new(0));
+        stats_bar.set_style(
+            ProgressStyle::default_bar()
+                .template("Stats: {msg}")
+                .unwrap(),
+        );
+
+        Self {
+            _multi: multi,
+            main_bar,
+            stats_bar,
+            _start_time: Instant::now(),
+            mode: ProgressMode::Records,
+        }
+    }
+
+    /// Update progress with current statistics (byte-based)
     pub fn update(&self, bytes: u64, total: usize, duplicates: usize, filtered: usize) {
-        self.main_bar.set_position(bytes);
+        match self.mode {
+            ProgressMode::Bytes => {
+                self.main_bar.set_position(bytes);
+            }
+            ProgressMode::Records => {
+                self.main_bar.set_position(total as u64);
+            }
+        }
+
         self.main_bar.set_message(format!("Processing..."));
 
         let stats_msg = if duplicates > 0 && filtered > 0 {

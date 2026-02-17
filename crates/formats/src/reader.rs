@@ -12,6 +12,9 @@ pub trait DatasetReader: Iterator<Item = Result<Record>> {
     /// Get total file size in bytes if known
     fn total_bytes(&self) -> Option<u64>;
 
+    /// Get total number of records if known (from file metadata)
+    fn total_records(&self) -> Option<u64>;
+
     /// Get number of bytes processed so far
     fn bytes_processed(&self) -> u64;
 
@@ -35,6 +38,10 @@ impl Iterator for JsonlDatasetReader {
 impl DatasetReader for JsonlDatasetReader {
     fn total_bytes(&self) -> Option<u64> {
         self.reader.total_bytes()
+    }
+
+    fn total_records(&self) -> Option<u64> {
+        None // JSONL doesn't have metadata for total record count
     }
 
     fn bytes_processed(&self) -> u64 {
@@ -64,13 +71,23 @@ impl DatasetReader for ParquetDatasetReader {
         self.reader.total_bytes()
     }
 
+    fn total_records(&self) -> Option<u64> {
+        self.reader.total_records()
+    }
+
     fn bytes_processed(&self) -> u64 {
         // For Parquet, we estimate based on records processed
         // This is approximate since we don't track actual byte position
-        if let Some(_total) = self.total_bytes() {
-            let records = self.records_processed() as u64;
-            // Rough estimation
-            records * 100 // Assume ~100 bytes per record
+        if let Some(total_bytes) = self.total_bytes() {
+            if let Some(total_records) = self.total_records() {
+                let records = self.records_processed() as u64;
+                // Accurate estimation based on actual totals
+                (records * total_bytes) / total_records.max(1)
+            } else {
+                // Fallback: rough estimation
+                let records = self.records_processed() as u64;
+                records * 100 // Assume ~100 bytes per record
+            }
         } else {
             0
         }

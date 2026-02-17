@@ -43,6 +43,7 @@ pub struct ParquetReader {
     current_batch: Option<Vec<Record>>,
     current_position: usize,
     total_bytes: Option<u64>,
+    total_rows: Option<u64>,
 }
 
 impl ParquetReader {
@@ -61,6 +62,10 @@ impl ParquetReader {
 
         let builder = ParquetRecordBatchReaderBuilder::try_new(file)?
             .with_batch_size(config.batch_size);
+
+        // Get total row count from Parquet metadata
+        let total_rows = builder.metadata().file_metadata().num_rows() as u64;
+        debug!("Parquet file has {} rows", total_rows);
 
         let builder = if let Some(ref columns) = config.columns {
             let projection_indices: Vec<usize> = {
@@ -89,6 +94,7 @@ impl ParquetReader {
             current_batch: None,
             current_position: 0,
             total_bytes: Some(total_bytes),
+            total_rows: Some(total_rows),
         })
     }
 
@@ -112,6 +118,11 @@ impl ParquetReader {
     /// Get total file size if known
     pub fn total_bytes(&self) -> Option<u64> {
         self.total_bytes
+    }
+
+    /// Get total number of records/rows if known (from Parquet metadata)
+    pub fn total_records(&self) -> Option<u64> {
+        self.total_rows
     }
 
     /// Get the number of batches processed
