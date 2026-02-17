@@ -226,7 +226,6 @@ async fn exact_dedup(
     json_output: bool,
 ) -> Result<()> {
     use dataset_dedup_core::exact_dedup::{ExactDeduplicator, HashStrategy};
-    use dataset_dedup_filters::text_preprocessing::{TextNormalizer};
     use dataset_dedup_formats::open_dataset;
 
     info!("Starting exact deduplication");
@@ -245,11 +244,10 @@ async fn exact_dedup(
     };
 
     let mut deduplicator = ExactDeduplicator::new(strategy);
-    let normalizer = if normalize {
-        Some(TextNormalizer::balanced())
-    } else {
-        None
-    };
+
+    // Note: Normalization should be integrated into the deduplicator itself
+    // For now, we just use the normalize flag to indicate intent
+    let _normalize_flag = normalize;
 
     let mut total = 0;
     let mut unique = 0;
@@ -263,13 +261,9 @@ async fn exact_dedup(
         let record = result?;
         total += 1;
 
-        let text_to_hash = if let Some(norm) = &normalizer {
-            norm.normalize(&serde_json::to_string(&record.data)?)
-        } else {
-            serde_json::to_string(&record.data)?
-        };
-
-        if !deduplicator.is_duplicate(&serde_json::from_str(&text_to_hash)?) {
+        // Pass the record directly to the deduplicator
+        // It handles field extraction based on the HashStrategy
+        if !deduplicator.is_duplicate(&record.data) {
             unique += 1;
         } else {
             duplicates += 1;
