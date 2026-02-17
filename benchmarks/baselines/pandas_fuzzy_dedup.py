@@ -28,11 +28,18 @@ def _write_line(content: str) -> None:
 
 
 def _print_progress(done: int, total: int, elapsed: float, duplicates: int,
-                    bar_width: int = 30) -> None:
+                    rate: float = None, bar_width: int = 30) -> None:
+    """
+    elapsed  – total time since script start (shown in the bar as 'X:XX elapsed')
+    rate     – optional stage-local records/sec; if None, derived from elapsed.
+               Separating the two lets us show global wall-clock time while still
+               computing a meaningful per-stage throughput and ETA.
+    """
     frac = done / total if total > 0 else 0
     filled = int(bar_width * frac)
     bar = '#' * filled + '.' * (bar_width - filled)
-    rate = done / elapsed if elapsed > 0 else 0
+    if rate is None:
+        rate = done / elapsed if elapsed > 0 else 0
     eta_str = _fmt_duration((total - done) / rate) if rate > 0 and done < total else '0:00'
     _write_line(
         f"  [{bar}] {frac * 100:5.1f}% | "
@@ -60,6 +67,10 @@ def create_minhash(text, num_perm=128):
 
 def fuzzy_dedup_pandas(input_file, output_file, text_field='text', threshold=0.8, num_perm=128):
     """Fuzzy deduplication using pandas + datasketch"""
+    # Record global start so every progress bar shows total wall-clock time,
+    # not just the time within the current stage.
+    script_start = time.time()
+
     print(f"Reading {input_file}...")
     start_read = time.time()
 
@@ -70,28 +81,39 @@ def fuzzy_dedup_pandas(input_file, output_file, text_field='text', threshold=0.8
     total_records = len(df)
     print(f"Read {total_records:,} records in {read_time:.2f}s")
 
-    # Normalize text (chunked so we can show progress)
+    chunk_size = 5_000
+
+    # --- Normalize text ---
     print("Normalizing text...")
     start_normalize = time.time()
-    chunk_size = 5_000
     chunks = []
     for i in range(0, total_records, chunk_size):
         end = min(i + chunk_size, total_records)
         chunks.append(df[text_field].iloc[i:end].apply(normalize_text))
-        _print_progress(end, total_records, time.time() - start_normalize, 0)
+        stage_elapsed = time.time() - start_normalize
+        _print_progress(end, total_records, time.time() - script_start, 0,
+                        rate=end / stage_elapsed if stage_elapsed > 0 else 0)
     df['normalized'] = pd.concat(chunks)
-    print()  # newline after progress bar
+    print()
     normalize_time = time.time() - start_normalize
     print(f"Normalized in {normalize_time:.2f}s")
 
-    # Create MinHash signatures
+    # --- Compute MinHash signatures ---
     print(f"Computing MinHash signatures (num_perm={num_perm})...")
     start_minhash = time.time()
-    df['minhash'] = df['normalized'].apply(lambda x: create_minhash(x, num_perm))
+    chunks = []
+    for i in range(0, total_records, chunk_size):
+        end = min(i + chunk_size, total_records)
+        chunks.append(df['normalized'].iloc[i:end].apply(lambda x: create_minhash(x, num_perm)))
+        stage_elapsed = time.time() - start_minhash
+        _print_progress(end, total_records, time.time() - script_start, 0,
+                        rate=end / stage_elapsed if stage_elapsed > 0 else 0)
+    df['minhash'] = pd.concat(chunks)
+    print()
     minhash_time = time.time() - start_minhash
     print(f"MinHash computed in {minhash_time:.2f}s")
 
-    # Build LSH index
+    # --- Build LSH index ---
     print(f"Building LSH index (threshold={threshold})...")
     start_lsh = time.time()
     lsh = MinHashLSH(threshold=threshold, num_perm=num_perm)
@@ -110,9 +132,11 @@ def fuzzy_dedup_pandas(input_file, output_file, text_field='text', threshold=0.8
             duplicates_found += 1
 
         if i % 500 == 0 or i == total_records:
-            _print_progress(i, total_records, time.time() - start_lsh, duplicates_found)
+            stage_elapsed = time.time() - start_lsh
+            _print_progress(i, total_records, time.time() - script_start, duplicates_found,
+                            rate=i / stage_elapsed if stage_elapsed > 0 else 0)
 
-    print()  # newline after progress bar
+    print()
     lsh_time = time.time() - start_lsh
     print(f"LSH deduplication took {lsh_time:.2f}s")
     print(f"Found {duplicates_found:,} duplicates ({duplicates_found/total_records*100:.1f}%)")
