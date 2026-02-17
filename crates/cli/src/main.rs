@@ -80,20 +80,29 @@ enum Commands {
         #[arg(short = 'F', long, default_value = "text")]
         field: String,
 
-        /// Number of MinHash functions (lower = faster, less accurate)
+        /// Number of MinHash hash functions
         #[arg(long, default_value = "128")]
         num_hashes: usize,
 
-        /// Shingle size for MinHash (number of words, or chars if --char-shingles)
-        #[arg(long, default_value = "2")]
+        /// Shingle size for MinHash (character n-grams by default, words with --word-shingles)
+        #[arg(long, default_value = "3")]
         shingle_size: usize,
 
-        /// Use character n-grams instead of word n-grams
+        /// Use word n-grams instead of character n-grams
         ///
-        /// NOT recommended for large datasets: char n-grams cause O(n²) LSH
-        /// false positives due to common English sequences ("the", " to", "ing").
+        /// Word bigrams are faster but less sensitive: misses near-duplicates
+        /// that share phrasing but differ in word choice. Use char n-grams
+        /// (the default) for accuracy matching Python datasketch results.
         #[arg(long, default_value = "false")]
-        char_shingles: bool,
+        word_shingles: bool,
+
+        /// LSH number of bands (default 16; more bands = higher recall, more false positives)
+        #[arg(long)]
+        bands: Option<usize>,
+
+        /// LSH rows per band (default 8; more rows = fewer false positives, lower recall)
+        #[arg(long)]
+        rows_per_band: Option<usize>,
 
         /// Show statistics without writing output
         #[arg(long)]
@@ -199,11 +208,13 @@ async fn main() -> Result<()> {
             field,
             num_hashes,
             shingle_size,
-            char_shingles,
+            word_shingles,
+            bands,
+            rows_per_band,
             dry_run,
             stats_only,
         } => {
-            fuzzy_dedup(input, output, threshold, field, num_hashes, shingle_size, !char_shingles, dry_run, stats_only, cli.json).await?;
+            fuzzy_dedup(input, output, threshold, field, num_hashes, shingle_size, word_shingles, bands, rows_per_band, dry_run, stats_only, cli.json).await?;
         }
         Commands::Filter {
             input,
@@ -337,12 +348,28 @@ async fn fuzzy_dedup(
     num_hashes: usize,
     shingle_size: usize,
     word_shingles: bool,
+    bands_arg: Option<usize>,
+    rows_per_band_arg: Option<usize>,
     dry_run: bool,
     stats_only: bool,
     json_output: bool,
 ) -> Result<()> {
     use dataset_dedup_core::fuzzy_dedup::{FuzzyDeduplicator, FuzzyDedupConfig};
     use dataset_dedup_formats::open_dataset;
+
+    // Resolve LSH band parameters.
+    // Default 16 bands × 8 rows = 128 hashes.
+    // Compared to the naive 32×4: FP rate drops ~1000x (from ~5% → 0.0004% at s=0.2)
+    // while TP rate at s=0.8 only drops from ~100% to ~95%.
+    let rows_per_band = rows_per_band_arg.unwrap_or(8);
+    let num_bands = bands_arg.unwrap_or_else(|| num_hashes / rows_per_band);
+
+    if num_hashes % rows_per_band != 0 {
+        eprintln!("Warning: num_hashes ({}) is not divisible by rows_per_band ({})",
+                  num_hashes, rows_per_band);
+        eprintln!("LSH will use {} bands × {} rows = {} hashes",
+                  num_bands, rows_per_band, num_bands * rows_per_band);
+    }
 
     info!("Starting fuzzy deduplication");
     info!("  Input: {:?}", input);
@@ -352,24 +379,10 @@ async fn fuzzy_dedup(
     info!("  Threshold: {}", threshold);
     info!("  Field: {}", field);
     info!("  MinHash functions: {}", num_hashes);
-    info!("  Shingle size: {} ({})", shingle_size, if word_shingles { "word n-grams" } else { "char n-grams" });
+    info!("  Shingle: size={} mode={}", shingle_size, if word_shingles { "word-ngrams" } else { "char-ngrams" });
+    info!("  LSH: {} bands × {} rows per band", num_bands, rows_per_band);
 
     let mut reader = open_dataset(&input)?;
-
-    // Calculate LSH parameters based on num_hashes
-    // Formula: num_bands * rows_per_band = num_hashes
-    // rows_per_band=4 balances sensitivity vs false positive rate
-    let rows_per_band = 4;
-    let num_bands = num_hashes / rows_per_band;
-
-    if num_hashes % rows_per_band != 0 {
-        eprintln!("Warning: num_hashes ({}) is not divisible by rows_per_band ({})",
-                  num_hashes, rows_per_band);
-        eprintln!("LSH will use {} bands × {} rows = {} hashes",
-                  num_bands, rows_per_band, num_bands * rows_per_band);
-    }
-
-    info!("  LSH bands: {}, rows per band: {}", num_bands, rows_per_band);
 
     // Create config with the specified field and parameters
     let config = FuzzyDedupConfig {
