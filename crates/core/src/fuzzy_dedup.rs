@@ -321,8 +321,10 @@ impl FuzzyDeduplicator {
 
     /// Process a pre-computed signature against the LSH index (must run serially).
     ///
-    /// Returns Some(duplicate_ids) if duplicates found, None if record was added to index.
-    pub fn process_prepared(&mut self, id: usize, signature: MinHashSignature) -> Option<Vec<usize>> {
+    /// Returns `Some(matches)` if duplicates found, where each element is
+    /// `(matched_id, minhash_similarity)`.  Returns `None` (and inserts into
+    /// the index) when no verified duplicate is found.
+    pub fn process_prepared(&mut self, id: usize, signature: MinHashSignature) -> Option<Vec<(usize, f64)>> {
         self.stats.total_processed += 1;
 
         let candidates = self.lsh_index.query(&signature, self.config.similarity_threshold);
@@ -332,13 +334,13 @@ impl FuzzyDeduplicator {
             return None;
         }
 
-        let mut duplicates = Vec::new();
+        let mut duplicates: Vec<(usize, f64)> = Vec::new();
         for &candidate_id in &candidates {
             self.stats.lsh_candidates_checked += 1;
             if let Some(candidate_sig) = self.lsh_index.get_signature(candidate_id) {
                 let similarity = signature.jaccard_similarity(candidate_sig);
                 if similarity >= self.config.similarity_threshold {
-                    duplicates.push(candidate_id);
+                    duplicates.push((candidate_id, similarity));
                     self.stats.verified_duplicates += 1;
                 }
             }
@@ -347,7 +349,7 @@ impl FuzzyDeduplicator {
         if !duplicates.is_empty() {
             self.stats.records_with_duplicates += 1;
             self.stats.total_duplicates_found += duplicates.len();
-            duplicates.sort_unstable();
+            duplicates.sort_unstable_by_key(|&(id, _)| id);
             Some(duplicates)
         } else {
             self.lsh_index.insert(id, signature);
@@ -416,6 +418,46 @@ impl FuzzyDeduplicator {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn test_wikipedia_title_no_false_positive() {
+        // Regression: Wikipedia title-only dataset, threshold=0.9.
+        // "Buru_thrush"    → normalised "buru_thrush"    (9 char-trigrams)
+        // "Buru_White-eye" → normalised "buru_white eye" (12 char-trigrams)
+        // 3 shared trigrams → true Jaccard = 3/18 = 0.166.
+        // MinHash estimate ≈ 0.22.  Must NOT be flagged as duplicate.
+        let config = FuzzyDedupConfig {
+            similarity_threshold: 0.9,
+            num_hashes: 128,
+            shingle_size: 3,
+            word_shingles: false,
+            num_bands: 16,
+            rows_per_band: 8,
+            text_field: "text".to_string(),
+        };
+        let mut dedup = FuzzyDeduplicator::with_config(config);
+
+        let r1 = json!({"text": "Buru_thrush"});
+        let r2 = json!({"text": "Buru_White-eye"});
+
+        let sig1 = dedup.prepare_signature(&r1).expect("sig1");
+        let sig2 = dedup.prepare_signature(&r2).expect("sig2");
+        let minhash_sim = sig1.jaccard_similarity(&sig2);
+        // Confirm the estimate is close to the true value (0.166 ± noise).
+        assert!(
+            minhash_sim < 0.5,
+            "MinHash Jaccard unexpectedly high: {:.4} (true ≈ 0.166)",
+            minhash_sim
+        );
+
+        dedup.add_record(1, &r1);
+        let dups = dedup.find_duplicates(&r2);
+        assert!(
+            dups.is_empty(),
+            "FALSE POSITIVE at threshold=0.9: MinHash sim={:.4}",
+            minhash_sim
+        );
+    }
 
     #[test]
     fn test_exact_duplicates() {
