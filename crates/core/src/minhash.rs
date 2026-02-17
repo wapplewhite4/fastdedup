@@ -96,23 +96,52 @@ impl MinHasher {
         hasher.finish()
     }
 
-    /// Compute MinHash signature for text - optimized to avoid string allocations
+    /// Compute MinHash signature for text - optimized with fast ASCII path
     pub fn compute_signature(&self, text: &str) -> MinHashSignature {
+        if text.is_empty() {
+            return MinHashSignature::new(vec![0; self.num_hashes]);
+        }
+
+        // Fast path for ASCII text (common case for English Wikipedia)
+        if text.is_ascii() {
+            return self.compute_signature_ascii(text.as_bytes());
+        }
+
+        // Slower path for UTF-8 text with multi-byte characters
+        self.compute_signature_utf8(text)
+    }
+
+    /// Fast path for ASCII text - no Vec<char> allocation needed
+    fn compute_signature_ascii(&self, bytes: &[u8]) -> MinHashSignature {
+        if bytes.len() < self.shingle_size {
+            let shingle_hash = self.hash_shingle(std::str::from_utf8(bytes).unwrap());
+            return self.compute_from_single_hash(shingle_hash);
+        }
+
+        let mut shingle_hashes = HashSet::new();
+
+        // Directly iterate over byte slices
+        for i in 0..=bytes.len() - self.shingle_size {
+            let shingle_bytes = &bytes[i..i + self.shingle_size];
+            let shingle = std::str::from_utf8(shingle_bytes).unwrap();
+            let hash = self.hash_shingle(shingle);
+            shingle_hashes.insert(hash);
+        }
+
+        self.compute_signature_from_hashes(&shingle_hashes)
+    }
+
+    /// Slower path for UTF-8 text with multi-byte characters
+    fn compute_signature_utf8(&self, text: &str) -> MinHashSignature {
         let chars: Vec<char> = text.chars().collect();
 
         if chars.len() < self.shingle_size {
-            // Handle short text
-            if text.is_empty() {
-                return MinHashSignature::new(vec![0; self.num_hashes]);
-            }
             let shingle_hash = self.hash_shingle(text);
             return self.compute_from_single_hash(shingle_hash);
         }
 
-        // Hash shingles directly without storing them as strings
-        // This avoids allocating thousands of String objects
         let mut shingle_hashes = HashSet::new();
-        let mut temp_shingle = String::with_capacity(self.shingle_size * 4); // Preallocate
+        let mut temp_shingle = String::with_capacity(self.shingle_size * 4);
 
         for i in 0..=chars.len() - self.shingle_size {
             temp_shingle.clear();
@@ -123,14 +152,16 @@ impl MinHasher {
             shingle_hashes.insert(hash);
         }
 
-        // Initialize signature with maximum values
+        self.compute_signature_from_hashes(&shingle_hashes)
+    }
+
+    /// Compute MinHash signature from a set of shingle hashes
+    fn compute_signature_from_hashes(&self, shingle_hashes: &HashSet<u64>) -> MinHashSignature {
         let mut signature = vec![u64::MAX; self.num_hashes];
 
-        // For each unique shingle hash, compute MinHash values
-        for &shingle_hash in &shingle_hashes {
+        for &shingle_hash in shingle_hashes {
             for i in 0..self.num_hashes {
                 let (a, b) = self.coefficients[i];
-                // Hash function: (a * x + b) % prime
                 let hash_value = (a.wrapping_mul(shingle_hash).wrapping_add(b)) % self.prime;
 
                 if hash_value < signature[i] {
