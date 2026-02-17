@@ -712,6 +712,7 @@ dependencies = [
  "dataset-dedup-filters",
  "dataset-dedup-formats",
  "indicatif",
+ "rayon",
  "serde",
  "serde_json",
  "serde_yaml",
