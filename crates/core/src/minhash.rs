@@ -51,6 +51,8 @@ pub struct MinHasher {
     num_hashes: usize,
     /// Size of shingles (k in k-shingles)
     shingle_size: usize,
+    /// Whether to use word-level shingles (true) or character-level (false)
+    word_shingles: bool,
     /// Random coefficients for hash functions (a, b pairs)
     coefficients: Vec<(u64, u64)>,
     /// Prime number for hash function
@@ -62,8 +64,18 @@ impl MinHasher {
     ///
     /// # Arguments
     /// * `num_hashes` - Number of hash functions (typically 128)
-    /// * `shingle_size` - Size of character shingles (typically 3)
+    /// * `shingle_size` - Size of character shingles (typically 3) or word shingles (typically 2)
     pub fn new(num_hashes: usize, shingle_size: usize) -> Self {
+        Self::new_with_mode(num_hashes, shingle_size, true)
+    }
+
+    /// Create a new MinHasher with explicit shingle mode
+    ///
+    /// # Arguments
+    /// * `num_hashes` - Number of hash functions (typically 128)
+    /// * `shingle_size` - Shingle size in words or characters
+    /// * `word_shingles` - If true, use word n-grams; if false, use character n-grams
+    pub fn new_with_mode(num_hashes: usize, shingle_size: usize, word_shingles: bool) -> Self {
         // Generate random-like coefficients using a simple LCG
         let mut coefficients = Vec::with_capacity(num_hashes);
         let mut seed = 42u64;
@@ -77,13 +89,17 @@ impl MinHasher {
         }
 
         info!(
-            "Created MinHasher with {} hash functions, shingle size {}",
-            num_hashes, shingle_size
+            "Created MinHasher with {} hash functions, {} shingle size {}, mode={}",
+            num_hashes,
+            if word_shingles { "word" } else { "char" },
+            shingle_size,
+            if word_shingles { "word-ngrams" } else { "char-ngrams" },
         );
 
         Self {
             num_hashes,
             shingle_size,
+            word_shingles,
             coefficients,
             prime: 2147483647, // Large prime number
         }
@@ -96,19 +112,55 @@ impl MinHasher {
         hasher.finish()
     }
 
-    /// Compute MinHash signature for text - optimized with fast ASCII path
+    /// Compute MinHash signature for text
+    ///
+    /// Uses word-level shingles by default (much more discriminative for natural
+    /// language text, and avoids O(n²) LSH false positives from common char n-grams).
     pub fn compute_signature(&self, text: &str) -> MinHashSignature {
         if text.is_empty() {
             return MinHashSignature::new(vec![0; self.num_hashes]);
         }
 
-        // Fast path for ASCII text (common case for English Wikipedia)
+        if self.word_shingles {
+            return self.compute_signature_words(text);
+        }
+
+        // Character-level path (legacy, not recommended for natural language)
         if text.is_ascii() {
             return self.compute_signature_ascii(text.as_bytes());
         }
-
-        // Slower path for UTF-8 text with multi-byte characters
         self.compute_signature_utf8(text)
+    }
+
+    /// Word n-gram shingles (preferred for natural language text)
+    ///
+    /// Word bigrams ("the quick", "quick brown") are far more discriminative
+    /// than character trigrams ("the", "he ", "e q"), which appear in nearly
+    /// every document and cause massive LSH false positives.
+    fn compute_signature_words(&self, text: &str) -> MinHashSignature {
+        let words: Vec<&str> = text.split_whitespace().collect();
+
+        if words.is_empty() {
+            return MinHashSignature::new(vec![0; self.num_hashes]);
+        }
+
+        if words.len() < self.shingle_size {
+            // Short text: use entire text as a single shingle
+            let hash = self.hash_shingle(text);
+            return self.compute_from_single_hash(hash);
+        }
+
+        let mut shingle_hashes = HashSet::new();
+        for i in 0..=words.len() - self.shingle_size {
+            // Hash the word n-gram without allocating a String
+            let mut hasher = AHasher::default();
+            for word in &words[i..i + self.shingle_size] {
+                word.hash(&mut hasher);
+            }
+            shingle_hashes.insert(hasher.finish());
+        }
+
+        self.compute_signature_from_hashes(&shingle_hashes)
     }
 
     /// Fast path for ASCII text - no Vec<char> allocation needed
@@ -354,12 +406,13 @@ mod tests {
 
     #[test]
     fn test_similar_texts() {
-        let hasher = MinHasher::new(128, 3);
-        let text1 = "The quick brown fox jumps over the lazy dog";
-        let text2 = "The quick brown fox jumps over a lazy dog"; // Very similar
+        let hasher = MinHasher::new(128, 2); // word bigrams
+        // Texts with only 1 word different out of ~20 → many shared word bigrams
+        let text1 = "the cat sat on the mat near the window in the bright sunny afternoon";
+        let text2 = "the cat sat on the mat near the window in the bright sunny morning";
 
         let sim = hasher.jaccard_similarity(text1, text2);
-        assert!(sim > 0.7); // Should be very similar
+        assert!(sim > 0.7, "Expected sim > 0.7, got {}", sim);
     }
 
     #[test]
@@ -466,11 +519,13 @@ mod tests {
 
     #[test]
     fn test_partial_overlap() {
-        let hasher = MinHasher::new(128, 3);
-        let text1 = "The quick brown fox";
-        let text2 = "The slow brown dog";
+        let hasher = MinHasher::new(128, 2); // word bigrams
+        // These texts share the middle portion ("sat on the mat near the window")
+        // so they should have meaningful but not complete overlap
+        let text1 = "the cat sat on the mat near the window it was quiet";
+        let text2 = "the dog sat on the mat near the window it was loud";
 
         let sim = hasher.jaccard_similarity(text1, text2);
-        assert!(sim > 0.2 && sim < 0.8); // Some overlap but not identical
+        assert!(sim > 0.2 && sim < 0.9, "Expected 0.2 < sim < 0.9, got {}", sim);
     }
 }

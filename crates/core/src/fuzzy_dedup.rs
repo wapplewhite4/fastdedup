@@ -3,7 +3,7 @@
 //! Provides a production-ready fuzzy deduplicator for detecting near-duplicate
 //! documents using MinHash signatures and LSH indexing.
 
-use crate::minhash::{LSHIndex, MinHasher};
+use crate::minhash::{LSHIndex, MinHasher, MinHashSignature};
 use dataset_dedup_filters::text_preprocessing::TextNormalizer;
 use serde_json::Value;
 use tracing::{debug, info, warn};
@@ -50,8 +50,14 @@ pub struct FuzzyDedupConfig {
     pub similarity_threshold: f64,
     /// Number of MinHash functions
     pub num_hashes: usize,
-    /// Shingle size for MinHash
+    /// Shingle size for MinHash (words if word_shingles=true, else characters)
     pub shingle_size: usize,
+    /// Use word-level shingles (recommended for natural language text)
+    ///
+    /// Word bigrams are far more discriminative than char trigrams for NLP text.
+    /// Char trigrams cause massive LSH false positives due to common English
+    /// sequences ("the", " to", "ing"), leading to O(n²) slowdown on large datasets.
+    pub word_shingles: bool,
     /// Number of LSH bands
     pub num_bands: usize,
     /// Rows per LSH band
@@ -65,7 +71,8 @@ impl Default for FuzzyDedupConfig {
         Self {
             similarity_threshold: 0.7,
             num_hashes: 128,
-            shingle_size: 3,
+            shingle_size: 2, // word bigrams by default
+            word_shingles: true,
             num_bands: 32,
             rows_per_band: 4,
             text_field: "text".to_string(),
@@ -104,7 +111,7 @@ impl FuzzyDeduplicator {
             config.similarity_threshold, config.num_hashes
         );
 
-        let minhash = MinHasher::new(config.num_hashes, config.shingle_size);
+        let minhash = MinHasher::new_with_mode(config.num_hashes, config.shingle_size, config.word_shingles);
         let lsh_index = LSHIndex::new(config.num_bands, config.rows_per_band);
         let normalizer = TextNormalizer::balanced();
 
@@ -297,6 +304,54 @@ impl FuzzyDeduplicator {
         debug!("Added record {} to fuzzy dedup index", id);
     }
 
+    /// Prepare a record by computing its MinHash signature (can run in parallel).
+    ///
+    /// Returns None if the record is missing the text field or normalizes to empty.
+    pub fn prepare_signature(&self, record: &Value) -> Option<MinHashSignature> {
+        let text = self.extract_text(record)?;
+        let normalized = self.normalizer.normalize(&text);
+        if normalized.is_empty() {
+            return None;
+        }
+        Some(self.minhash.compute_signature(&normalized))
+    }
+
+    /// Process a pre-computed signature against the LSH index (must run serially).
+    ///
+    /// Returns Some(duplicate_ids) if duplicates found, None if record was added to index.
+    pub fn process_prepared(&mut self, id: usize, signature: MinHashSignature) -> Option<Vec<usize>> {
+        self.stats.total_processed += 1;
+
+        let candidates = self.lsh_index.query(&signature, self.config.similarity_threshold);
+
+        if candidates.is_empty() {
+            self.lsh_index.insert(id, signature);
+            return None;
+        }
+
+        let mut duplicates = Vec::new();
+        for &candidate_id in &candidates {
+            self.stats.lsh_candidates_checked += 1;
+            if let Some(candidate_sig) = self.lsh_index.get_signature(candidate_id) {
+                let similarity = signature.jaccard_similarity(candidate_sig);
+                if similarity >= self.config.similarity_threshold {
+                    duplicates.push(candidate_id);
+                    self.stats.verified_duplicates += 1;
+                }
+            }
+        }
+
+        if !duplicates.is_empty() {
+            self.stats.records_with_duplicates += 1;
+            self.stats.total_duplicates_found += duplicates.len();
+            duplicates.sort_unstable();
+            Some(duplicates)
+        } else {
+            self.lsh_index.insert(id, signature);
+            None
+        }
+    }
+
     /// Get current statistics
     pub fn stats(&self) -> &FuzzyDedupStats {
         &self.stats
@@ -376,14 +431,14 @@ mod tests {
     fn test_near_duplicates() {
         let mut dedup = FuzzyDeduplicator::new(0.7);
 
-        let record1 = json!({"text": "The quick brown fox jumps over the lazy dog"});
-        let record2 = json!({"text": "The quick brown fox jumps over a lazy dog"});
+        // Longer texts with only 1 word changed → ~80% word-bigram Jaccard
+        let record1 = json!({"text": "the cat sat on the mat near the window and the light was bright outside"});
+        let record2 = json!({"text": "the cat sat on the mat near the window and the light was dim outside"});
 
         dedup.add_record(0, &record1);
 
         let duplicates = dedup.find_duplicates(&record2);
-        // Should find as duplicate due to high similarity
-        assert!(duplicates.contains(&0));
+        assert!(duplicates.contains(&0), "Should find near-duplicate");
     }
 
     #[test]
@@ -530,16 +585,17 @@ mod tests {
 
     #[test]
     fn test_threshold_sensitivity() {
-        let record1 = json!({"text": "The quick brown fox jumps"});
-        let record2 = json!({"text": "The quick brown dog jumps"});
+        // 11-word texts with 1 word different → ~67% word-bigram Jaccard
+        let record1 = json!({"text": "the quick brown fox jumps over the lazy dog near the river"});
+        let record2 = json!({"text": "the quick brown cat jumps over the lazy dog near the river"});
 
-        // High threshold - should not match
+        // High threshold (0.95) - should not match (Jaccard ≈ 0.67)
         let mut dedup_high = FuzzyDeduplicator::new(0.95);
         dedup_high.add_record(0, &record1);
         let dups_high = dedup_high.find_duplicates(&record2);
         assert!(dups_high.is_empty());
 
-        // Low threshold - should match
+        // Low threshold (0.5) - should match (Jaccard ≈ 0.67 > 0.5)
         let mut dedup_low = FuzzyDeduplicator::new(0.5);
         dedup_low.add_record(0, &record1);
         let dups_low = dedup_low.find_duplicates(&record2);

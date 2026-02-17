@@ -8,6 +8,7 @@ mod progress;
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
+use rayon::prelude::*;
 use std::path::PathBuf;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
@@ -83,9 +84,16 @@ enum Commands {
         #[arg(long, default_value = "128")]
         num_hashes: usize,
 
-        /// Shingle size for MinHash (character n-grams)
-        #[arg(long, default_value = "3")]
+        /// Shingle size for MinHash (number of words, or chars if --char-shingles)
+        #[arg(long, default_value = "2")]
         shingle_size: usize,
+
+        /// Use character n-grams instead of word n-grams
+        ///
+        /// NOT recommended for large datasets: char n-grams cause O(n²) LSH
+        /// false positives due to common English sequences ("the", " to", "ing").
+        #[arg(long, default_value = "false")]
+        char_shingles: bool,
 
         /// Show statistics without writing output
         #[arg(long)]
@@ -191,10 +199,11 @@ async fn main() -> Result<()> {
             field,
             num_hashes,
             shingle_size,
+            char_shingles,
             dry_run,
             stats_only,
         } => {
-            fuzzy_dedup(input, output, threshold, field, num_hashes, shingle_size, dry_run, stats_only, cli.json).await?;
+            fuzzy_dedup(input, output, threshold, field, num_hashes, shingle_size, !char_shingles, dry_run, stats_only, cli.json).await?;
         }
         Commands::Filter {
             input,
@@ -327,6 +336,7 @@ async fn fuzzy_dedup(
     field: String,
     num_hashes: usize,
     shingle_size: usize,
+    word_shingles: bool,
     dry_run: bool,
     stats_only: bool,
     json_output: bool,
@@ -342,13 +352,13 @@ async fn fuzzy_dedup(
     info!("  Threshold: {}", threshold);
     info!("  Field: {}", field);
     info!("  MinHash functions: {}", num_hashes);
-    info!("  Shingle size: {}", shingle_size);
+    info!("  Shingle size: {} ({})", shingle_size, if word_shingles { "word n-grams" } else { "char n-grams" });
 
     let mut reader = open_dataset(&input)?;
 
     // Calculate LSH parameters based on num_hashes
     // Formula: num_bands * rows_per_band = num_hashes
-    // We keep rows_per_band = 4 for good balance
+    // rows_per_band=4 balances sensitivity vs false positive rate
     let rows_per_band = 4;
     let num_bands = num_hashes / rows_per_band;
 
@@ -367,6 +377,7 @@ async fn fuzzy_dedup(
         text_field: field.clone(),
         num_hashes,
         shingle_size,
+        word_shingles,
         num_bands,
         rows_per_band,
     };
@@ -384,24 +395,48 @@ async fn fuzzy_dedup(
         ProgressReporter::new(total_bytes)
     };
 
-    while let Some(result) = reader.next() {
-        let record = result?;
-        total += 1;
+    // Process in batches: compute MinHash signatures in parallel (rayon),
+    // then do LSH query/insert serially (LSH is not thread-safe).
+    const BATCH_SIZE: usize = 2000;
 
-        // Use process_record() which computes MinHash signature only once
-        let dups = deduplicator.process_record(total, &record.data);
-
-        if dups.is_none() {
-            // No duplicates found, record was added to index
-            unique += 1;
-        } else {
-            duplicates += 1;
+    loop {
+        // Collect a batch of records
+        let mut batch = Vec::with_capacity(BATCH_SIZE);
+        for _ in 0..BATCH_SIZE {
+            match reader.next() {
+                Some(Ok(record)) => batch.push(record),
+                Some(Err(e)) => return Err(e.into()),
+                None => break,
+            }
+        }
+        if batch.is_empty() {
+            break;
         }
 
-        // Update more frequently for fuzzy dedup since MinHash is slow
-        if total % 100 == 0 {
-            progress.update(reader.bytes_processed(), total, duplicates, 0);
+        // Parallel phase: compute MinHash signatures for all records in batch
+        let signatures: Vec<_> = batch
+            .par_iter()
+            .map(|record| deduplicator.prepare_signature(&record.data))
+            .collect();
+
+        // Serial phase: LSH query + insert (order matters for dedup correctness)
+        for (record, sig_opt) in batch.into_iter().zip(signatures) {
+            total += 1;
+            let _ = record; // record data only needed for signature (already computed)
+
+            let dups = match sig_opt {
+                Some(sig) => deduplicator.process_prepared(total, sig),
+                None => None, // missing/empty text field
+            };
+
+            if dups.is_none() {
+                unique += 1;
+            } else {
+                duplicates += 1;
+            }
         }
+
+        progress.update(reader.bytes_processed(), total, duplicates, 0);
     }
 
     progress.finish();
