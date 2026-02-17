@@ -470,12 +470,13 @@ async fn fuzzy_dedup(
 
         // Serial phase: LSH query + insert (order matters for dedup correctness)
         for (record, sig_opt) in batch.into_iter().zip(signatures) {
-            total += 1;
-
+            // `total` is the 0-based record index so that __duplicate_of IDs
+            // correspond directly to pandas/numpy df.iloc[id] lookups.
             let dups = match sig_opt {
                 Some(sig) => deduplicator.process_prepared(total, sig),
                 None => None, // missing/empty text field — treat as unique
             };
+            total += 1;
 
             match dups {
                 None => {
