@@ -38,6 +38,46 @@ import os
 from multiprocessing import Pool, cpu_count
 from datasketch import MinHash, MinHashLSH
 
+
+# ---------------------------------------------------------------------------
+# Progress bar helpers
+# ---------------------------------------------------------------------------
+
+def _fmt_duration(seconds: float) -> str:
+    """Format a duration in seconds as m:ss or h:mm:ss."""
+    seconds = int(seconds)
+    h, remainder = divmod(seconds, 3600)
+    m, s = divmod(remainder, 60)
+    if h:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
+
+
+def _print_progress(done: int, total: int, elapsed: float, duplicates: int,
+                    bar_width: int = 30) -> None:
+    """
+    Overwrite the current line with a compact progress bar.
+
+      [######................]  35% | 3,500/10,000 | 0:23 elapsed | ETA 0:42 | 152 rec/s | 120 dupes
+    """
+    frac = done / total if total > 0 else 0
+    filled = int(bar_width * frac)
+    bar = '#' * filled + '.' * (bar_width - filled)
+
+    rate = done / elapsed if elapsed > 0 else 0
+    eta_str = _fmt_duration((total - done) / rate) if rate > 0 and done < total else '0:00'
+
+    line = (
+        f"\r  [{bar}] {frac * 100:5.1f}% | "
+        f"{done:,}/{total:,} | "
+        f"{_fmt_duration(elapsed)} elapsed | "
+        f"ETA {eta_str} | "
+        f"{rate:,.0f} rec/s | "
+        f"{duplicates:,} dupes"
+    )
+    sys.stdout.write(line)
+    sys.stdout.flush()
+
 # Compile regexes once at module level (shared across all calls in a process)
 _PUNCT_RE = re.compile(r'[^a-z0-9\s]')
 _SPACE_RE = re.compile(r'\s+')
@@ -104,6 +144,8 @@ def optimized_fuzzy_dedup(
 
     start = time.time()
     parquet_file = pq.ParquetFile(input_file)
+    total_rows = parquet_file.metadata.num_rows  # known upfront from Parquet metadata
+    print(f"  Total rows: {total_rows:,}")
 
     with Pool(processes=num_workers) as pool:
         for batch in parquet_file.iter_batches(batch_size=batch_size):
@@ -144,11 +186,10 @@ def optimized_fuzzy_dedup(
             if len(filtered) > 0:
                 output_batches.append(filtered)
 
-        # Progress
-        elapsed = time.time() - start
-        rate = total_records / elapsed if elapsed > 0 else 0
-        print(f"  {total_records:,} records processed | "
-              f"{duplicates:,} duplicates | {rate:,.0f} rec/s")
+            _print_progress(total_records, total_rows, time.time() - start, duplicates)
+
+    # Move to next line after the progress bar
+    print()
 
     # Write output as Parquet
     write_start = time.time()
