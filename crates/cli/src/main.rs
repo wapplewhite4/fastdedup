@@ -79,6 +79,14 @@ enum Commands {
         #[arg(short = 'F', long, default_value = "text")]
         field: String,
 
+        /// Number of MinHash functions (lower = faster, less accurate)
+        #[arg(long, default_value = "128")]
+        num_hashes: usize,
+
+        /// Shingle size for MinHash (character n-grams)
+        #[arg(long, default_value = "3")]
+        shingle_size: usize,
+
         /// Show statistics without writing output
         #[arg(long)]
         dry_run: bool,
@@ -181,10 +189,12 @@ async fn main() -> Result<()> {
             output,
             threshold,
             field,
+            num_hashes,
+            shingle_size,
             dry_run,
             stats_only,
         } => {
-            fuzzy_dedup(input, output, threshold, field, dry_run, stats_only, cli.json).await?;
+            fuzzy_dedup(input, output, threshold, field, num_hashes, shingle_size, dry_run, stats_only, cli.json).await?;
         }
         Commands::Filter {
             input,
@@ -311,6 +321,8 @@ async fn fuzzy_dedup(
     output: PathBuf,
     threshold: f64,
     field: String,
+    num_hashes: usize,
+    shingle_size: usize,
     dry_run: bool,
     stats_only: bool,
     json_output: bool,
@@ -325,13 +337,17 @@ async fn fuzzy_dedup(
     }
     info!("  Threshold: {}", threshold);
     info!("  Field: {}", field);
+    info!("  MinHash functions: {}", num_hashes);
+    info!("  Shingle size: {}", shingle_size);
 
     let mut reader = open_dataset(&input)?;
 
-    // Create config with the specified field
+    // Create config with the specified field and parameters
     let config = FuzzyDedupConfig {
         similarity_threshold: threshold,
         text_field: field.clone(),
+        num_hashes,
+        shingle_size,
         ..Default::default()
     };
     let mut deduplicator = FuzzyDeduplicator::with_config(config);
