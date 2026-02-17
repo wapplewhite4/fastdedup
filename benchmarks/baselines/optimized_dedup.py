@@ -414,7 +414,8 @@ def run(args: argparse.Namespace) -> None:
     t0 = time.perf_counter()
     table, texts = read_dataset(input_path, field)
     read_time = time.perf_counter() - t0
-    console.print(f"  [green]✓[/green] {len(texts):,} records read in {read_time:.2f}s\n")
+    original_total = len(texts)  # Store the original count before any deduplication
+    console.print(f"  [green]✓[/green] {original_total:,} records read in {read_time:.2f}s\n")
 
     total_duplicates = 0
 
@@ -456,7 +457,7 @@ def run(args: argparse.Namespace) -> None:
         mode        = mode,
         input_path  = input_path,
         output_path = output_path,
-        total       = len(texts) + total_duplicates,   # original total
+        total       = original_total,  # Use the original total from before any deduplication
         duplicates  = total_duplicates,
         elapsed     = elapsed,
         peak_mb     = max(peak_mem, 0),
