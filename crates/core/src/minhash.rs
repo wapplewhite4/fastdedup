@@ -89,25 +89,6 @@ impl MinHasher {
         }
     }
 
-    /// Generate k-shingles from text
-    fn generate_shingles(&self, text: &str) -> HashSet<String> {
-        let chars: Vec<char> = text.chars().collect();
-        let mut shingles = HashSet::new();
-
-        if chars.len() < self.shingle_size {
-            // If text is shorter than shingle size, use the whole text
-            shingles.insert(text.to_string());
-            return shingles;
-        }
-
-        for i in 0..=chars.len() - self.shingle_size {
-            let shingle: String = chars[i..i + self.shingle_size].iter().collect();
-            shingles.insert(shingle);
-        }
-
-        shingles
-    }
-
     /// Hash a shingle to a u64
     fn hash_shingle(&self, shingle: &str) -> u64 {
         let mut hasher = AHasher::default();
@@ -115,22 +96,38 @@ impl MinHasher {
         hasher.finish()
     }
 
-    /// Compute MinHash signature for text
+    /// Compute MinHash signature for text - optimized to avoid string allocations
     pub fn compute_signature(&self, text: &str) -> MinHashSignature {
-        let shingles = self.generate_shingles(text);
+        let chars: Vec<char> = text.chars().collect();
 
-        if shingles.is_empty() {
-            // Empty text - return signature of all zeros
-            return MinHashSignature::new(vec![0; self.num_hashes]);
+        if chars.len() < self.shingle_size {
+            // Handle short text
+            if text.is_empty() {
+                return MinHashSignature::new(vec![0; self.num_hashes]);
+            }
+            let shingle_hash = self.hash_shingle(text);
+            return self.compute_from_single_hash(shingle_hash);
+        }
+
+        // Hash shingles directly without storing them as strings
+        // This avoids allocating thousands of String objects
+        let mut shingle_hashes = HashSet::new();
+        let mut temp_shingle = String::with_capacity(self.shingle_size * 4); // Preallocate
+
+        for i in 0..=chars.len() - self.shingle_size {
+            temp_shingle.clear();
+            for j in 0..self.shingle_size {
+                temp_shingle.push(chars[i + j]);
+            }
+            let hash = self.hash_shingle(&temp_shingle);
+            shingle_hashes.insert(hash);
         }
 
         // Initialize signature with maximum values
         let mut signature = vec![u64::MAX; self.num_hashes];
 
-        // For each shingle, compute hashes and update signature
-        for shingle in &shingles {
-            let shingle_hash = self.hash_shingle(shingle);
-
+        // For each unique shingle hash, compute MinHash values
+        for &shingle_hash in &shingle_hashes {
             for i in 0..self.num_hashes {
                 let (a, b) = self.coefficients[i];
                 // Hash function: (a * x + b) % prime
@@ -143,10 +140,20 @@ impl MinHasher {
         }
 
         debug!(
-            "Generated MinHash signature with {} shingles",
-            shingles.len()
+            "Generated MinHash signature with {} unique shingles",
+            shingle_hashes.len()
         );
 
+        MinHashSignature::new(signature)
+    }
+
+    /// Helper for computing signature from a single hash
+    fn compute_from_single_hash(&self, shingle_hash: u64) -> MinHashSignature {
+        let mut signature = vec![u64::MAX; self.num_hashes];
+        for i in 0..self.num_hashes {
+            let (a, b) = self.coefficients[i];
+            signature[i] = (a.wrapping_mul(shingle_hash).wrapping_add(b)) % self.prime;
+        }
         MinHashSignature::new(signature)
     }
 
