@@ -7,6 +7,7 @@ import pandas as pd
 import time
 import sys
 import re
+import shutil
 from datasketch import MinHash, MinHashLSH
 
 
@@ -19,6 +20,13 @@ def _fmt_duration(seconds: float) -> str:
     return f"{m}:{s:02d}"
 
 
+def _write_line(content: str) -> None:
+    """Write an in-place \\r line that never wraps or leaves stale characters."""
+    cols = shutil.get_terminal_size(fallback=(120, 24)).columns - 1
+    sys.stdout.write('\r' + content[:cols].ljust(cols))
+    sys.stdout.flush()
+
+
 def _print_progress(done: int, total: int, elapsed: float, duplicates: int,
                     bar_width: int = 30) -> None:
     frac = done / total if total > 0 else 0
@@ -26,15 +34,14 @@ def _print_progress(done: int, total: int, elapsed: float, duplicates: int,
     bar = '#' * filled + '.' * (bar_width - filled)
     rate = done / elapsed if elapsed > 0 else 0
     eta_str = _fmt_duration((total - done) / rate) if rate > 0 and done < total else '0:00'
-    sys.stdout.write(
-        f"\r  [{bar}] {frac * 100:5.1f}% | "
+    _write_line(
+        f"  [{bar}] {frac * 100:5.1f}% | "
         f"{done:,}/{total:,} | "
         f"{_fmt_duration(elapsed)} elapsed | "
         f"ETA {eta_str} | "
         f"{rate:,.0f} rec/s | "
         f"{duplicates:,} dupes"
     )
-    sys.stdout.flush()
 
 def normalize_text(text):
     """Normalize text for comparison"""
@@ -63,10 +70,17 @@ def fuzzy_dedup_pandas(input_file, output_file, text_field='text', threshold=0.8
     total_records = len(df)
     print(f"Read {total_records:,} records in {read_time:.2f}s")
 
-    # Normalize text
+    # Normalize text (chunked so we can show progress)
     print("Normalizing text...")
     start_normalize = time.time()
-    df['normalized'] = df[text_field].apply(normalize_text)
+    chunk_size = 5_000
+    chunks = []
+    for i in range(0, total_records, chunk_size):
+        end = min(i + chunk_size, total_records)
+        chunks.append(df[text_field].iloc[i:end].apply(normalize_text))
+        _print_progress(end, total_records, time.time() - start_normalize, 0)
+    df['normalized'] = pd.concat(chunks)
+    print()  # newline after progress bar
     normalize_time = time.time() - start_normalize
     print(f"Normalized in {normalize_time:.2f}s")
 

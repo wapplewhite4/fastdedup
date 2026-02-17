@@ -36,6 +36,7 @@ import time
 import sys
 import re
 import os
+import shutil
 from multiprocessing import Pool, cpu_count
 from datasketch import MinHash, MinHashLSH
 
@@ -54,6 +55,20 @@ def _fmt_duration(seconds: float) -> str:
     return f"{m}:{s:02d}"
 
 
+def _write_line(content: str) -> None:
+    """
+    Write content as an in-place \r line that never wraps.
+
+    Truncates to (terminal_width - 1) characters so the cursor stays on the
+    same visual line, then pads with spaces to the same width so any previous
+    longer line is fully erased.  Falls back to 120 columns if the terminal
+    size cannot be determined (e.g. when stdout is redirected).
+    """
+    cols = shutil.get_terminal_size(fallback=(120, 24)).columns - 1
+    sys.stdout.write('\r' + content[:cols].ljust(cols))
+    sys.stdout.flush()
+
+
 def _print_progress(done: int, total: int, elapsed: float, duplicates: int,
                     bar_width: int = 30) -> None:
     """
@@ -68,16 +83,14 @@ def _print_progress(done: int, total: int, elapsed: float, duplicates: int,
     rate = done / elapsed if elapsed > 0 else 0
     eta_str = _fmt_duration((total - done) / rate) if rate > 0 and done < total else '0:00'
 
-    line = (
-        f"\r  [{bar}] {frac * 100:5.1f}% | "
+    _write_line(
+        f"  [{bar}] {frac * 100:5.1f}% | "
         f"{done:,}/{total:,} | "
         f"{_fmt_duration(elapsed)} elapsed | "
         f"ETA {eta_str} | "
         f"{rate:,.0f} rec/s | "
         f"{duplicates:,} dupes"
     )
-    sys.stdout.write(line)
-    sys.stdout.flush()
 
 # Compile regexes once at module level (shared across all calls in a process)
 _PUNCT_RE = re.compile(r'[^a-z0-9\s]')
@@ -190,15 +203,14 @@ def optimized_fuzzy_dedup(
                     _fmt_duration((total_rows - total_records) / rate)
                     if rate > 0 else '?:??'
                 )
-                sys.stdout.write(
-                    f"\r  {next(_spinner)} Hashing...  "
+                _write_line(
+                    f"  {next(_spinner)} Hashing...  "
                     f"{total_records:,}/{total_rows:,} | "
                     f"{_fmt_duration(elapsed)} elapsed | "
                     f"ETA {eta_str} | "
                     f"{rate:,.0f} rec/s | "
                     f"{duplicates:,} dupes"
                 )
-                sys.stdout.flush()
                 async_result.wait(timeout=0.12)
 
             all_hashvalues = async_result.get()
