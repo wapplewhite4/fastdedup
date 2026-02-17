@@ -34,7 +34,7 @@ def streaming_dedup(input_file, output_file, text_field='text', batch_size=10000
 
         # Filter duplicates
         mask = ~hashes.isin(seen_hashes)
-        unique_batch = batch_df[mask]
+        unique_batch = batch_df[mask].reset_index(drop=True)
 
         # Update seen hashes
         seen_hashes.update(hashes[mask])
@@ -42,7 +42,7 @@ def streaming_dedup(input_file, output_file, text_field='text', batch_size=10000
         duplicates += len(batch_df) - len(unique_batch)
 
         if len(unique_batch) > 0:
-            batches.append(pa.RecordBatch.from_pandas(unique_batch))
+            batches.append(pa.RecordBatch.from_pandas(unique_batch, preserve_index=False))
 
         if (batch_idx + 1) % 10 == 0:
             print(f"Processed {total_records:,} records, {duplicates:,} duplicates found...")
