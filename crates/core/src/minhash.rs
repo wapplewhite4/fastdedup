@@ -3,9 +3,9 @@
 //! Provides MinHash signatures for documents and LSH indexing for
 //! fast similarity search.
 
-use ahash::AHasher;
+use ahash::RandomState;
 use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
+use std::hash::{BuildHasher, Hash, Hasher};
 use tracing::{debug, info};
 
 /// MinHash signature for a document
@@ -57,6 +57,8 @@ pub struct MinHasher {
     coefficients: Vec<(u64, u64)>,
     /// Prime number for hash function
     prime: u64,
+    /// Fixed-seed hash builder for deterministic shingle hashing
+    hash_builder: RandomState,
 }
 
 impl MinHasher {
@@ -102,12 +104,21 @@ impl MinHasher {
             word_shingles,
             coefficients,
             prime: 2147483647, // Large prime number
+            // Fixed seeds ensure identical shingle hashes across runs.
+            // AHasher::default() is randomly seeded per-process (DoS prevention),
+            // which caused non-deterministic duplicate counts between runs.
+            hash_builder: RandomState::with_seeds(
+                0x517cc1b727220a95,
+                0x8d8f5f3b12c4a6e1,
+                0xbf58476d1ce4e5b9,
+                0x94d049bb133111eb,
+            ),
         }
     }
 
     /// Hash a shingle to a u64
     fn hash_shingle(&self, shingle: &str) -> u64 {
-        let mut hasher = AHasher::default();
+        let mut hasher = self.hash_builder.build_hasher();
         shingle.hash(&mut hasher);
         hasher.finish()
     }
@@ -153,7 +164,7 @@ impl MinHasher {
         let mut shingle_hashes = HashSet::new();
         for i in 0..=words.len() - self.shingle_size {
             // Hash the word n-gram without allocating a String
-            let mut hasher = AHasher::default();
+            let mut hasher = self.hash_builder.build_hasher();
             for word in &words[i..i + self.shingle_size] {
                 word.hash(&mut hasher);
             }
