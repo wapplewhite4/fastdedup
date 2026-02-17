@@ -9,6 +9,33 @@ import sys
 import re
 from datasketch import MinHash, MinHashLSH
 
+
+def _fmt_duration(seconds: float) -> str:
+    seconds = int(seconds)
+    h, remainder = divmod(seconds, 3600)
+    m, s = divmod(remainder, 60)
+    if h:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
+
+
+def _print_progress(done: int, total: int, elapsed: float, duplicates: int,
+                    bar_width: int = 30) -> None:
+    frac = done / total if total > 0 else 0
+    filled = int(bar_width * frac)
+    bar = '#' * filled + '.' * (bar_width - filled)
+    rate = done / elapsed if elapsed > 0 else 0
+    eta_str = _fmt_duration((total - done) / rate) if rate > 0 and done < total else '0:00'
+    sys.stdout.write(
+        f"\r  [{bar}] {frac * 100:5.1f}% | "
+        f"{done:,}/{total:,} | "
+        f"{_fmt_duration(elapsed)} elapsed | "
+        f"ETA {eta_str} | "
+        f"{rate:,.0f} rec/s | "
+        f"{duplicates:,} dupes"
+    )
+    sys.stdout.flush()
+
 def normalize_text(text):
     """Normalize text for comparison"""
     text = str(text).lower()
@@ -58,22 +85,20 @@ def fuzzy_dedup_pandas(input_file, output_file, text_field='text', threshold=0.8
     duplicates_found = 0
     keep_indices = []
 
-    for idx, row in df.iterrows():
+    for i, (idx, row) in enumerate(df.iterrows(), 1):
         minhash = row['minhash']
-        # Query for similar items
         result = lsh.query(minhash)
 
         if len(result) == 0:
-            # No duplicates found, keep this record
             lsh.insert(str(idx), minhash)
             keep_indices.append(idx)
         else:
-            # Duplicate found, skip this record
             duplicates_found += 1
 
-        if (idx + 1) % 10000 == 0:
-            print(f"Processed {idx + 1:,} records, {duplicates_found:,} duplicates found...")
+        if i % 500 == 0 or i == total_records:
+            _print_progress(i, total_records, time.time() - start_lsh, duplicates_found)
 
+    print()  # newline after progress bar
     lsh_time = time.time() - start_lsh
     print(f"LSH deduplication took {lsh_time:.2f}s")
     print(f"Found {duplicates_found:,} duplicates ({duplicates_found/total_records*100:.1f}%)")
