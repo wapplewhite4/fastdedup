@@ -342,13 +342,29 @@ async fn fuzzy_dedup(
 
     let mut reader = open_dataset(&input)?;
 
+    // Calculate LSH parameters based on num_hashes
+    // Formula: num_bands * rows_per_band = num_hashes
+    // We keep rows_per_band = 4 for good balance
+    let rows_per_band = 4;
+    let num_bands = num_hashes / rows_per_band;
+
+    if num_hashes % rows_per_band != 0 {
+        eprintln!("Warning: num_hashes ({}) is not divisible by rows_per_band ({})",
+                  num_hashes, rows_per_band);
+        eprintln!("LSH will use {} bands × {} rows = {} hashes",
+                  num_bands, rows_per_band, num_bands * rows_per_band);
+    }
+
+    info!("  LSH bands: {}, rows per band: {}", num_bands, rows_per_band);
+
     // Create config with the specified field and parameters
     let config = FuzzyDedupConfig {
         similarity_threshold: threshold,
         text_field: field.clone(),
         num_hashes,
         shingle_size,
-        ..Default::default()
+        num_bands,
+        rows_per_band,
     };
     let mut deduplicator = FuzzyDeduplicator::with_config(config);
 
