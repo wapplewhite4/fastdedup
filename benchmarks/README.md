@@ -30,7 +30,9 @@ apt install hyperfine  # Debian/Ubuntu
 
 ## Running Benchmarks
 
-### Option 1: Full Comparison Suite
+### Exact Deduplication Benchmarks
+
+#### Option 1: Full Comparison Suite
 
 Runs all baselines and verifies results:
 
@@ -38,7 +40,7 @@ Runs all baselines and verifies results:
 ./benchmarks/run_comparison.sh
 ```
 
-### Option 2: Hyperfine (Cleaner Output)
+#### Option 2: Hyperfine (Cleaner Output)
 
 Requires hyperfine installed:
 
@@ -50,7 +52,7 @@ This creates:
 - `benchmarks/results.md` - Markdown table
 - `benchmarks/results.json` - JSON results
 
-### Option 3: Individual Tests
+#### Option 3: Individual Tests
 
 ```bash
 # Pandas baseline
@@ -75,6 +77,50 @@ cargo run --release --package dataset-dedup-cli -- exact-dedup \
     --field text
 ```
 
+### Fuzzy Deduplication Benchmarks (MinHash + LSH)
+
+#### Option 1: Full Fuzzy Comparison
+
+```bash
+./benchmarks/run_fuzzy_comparison.sh
+```
+
+#### Option 2: Hyperfine Fuzzy Benchmark
+
+```bash
+./benchmarks/hyperfine_fuzzy_comparison.sh
+```
+
+#### Option 3: Individual Fuzzy Tests
+
+```bash
+# Pandas fuzzy dedup
+python3 benchmarks/baselines/pandas_fuzzy_dedup.py \
+    test_data/wikipedia_sample.parquet \
+    benchmarks/output_fuzzy/pandas_out.parquet \
+    0.8 128
+
+# Polars fuzzy dedup
+python3 benchmarks/baselines/polars_fuzzy_dedup.py \
+    test_data/wikipedia_sample.parquet \
+    benchmarks/output_fuzzy/polars_out.parquet \
+    0.8 128
+
+# Streaming fuzzy dedup
+python3 benchmarks/baselines/streaming_fuzzy_dedup.py \
+    test_data/wikipedia_sample.parquet \
+    benchmarks/output_fuzzy/streaming_out.parquet \
+    0.8 128
+
+# Rust fuzzy dedup
+cargo run --release --package dataset-dedup-cli -- fuzzy-dedup \
+    --input test_data/wikipedia_sample.parquet \
+    --output benchmarks/output_fuzzy/rust_out.parquet \
+    --field text \
+    --threshold 0.8 \
+    --num-perm 128
+```
+
 ## Visualizing Results
 
 After running hyperfine benchmarks:
@@ -88,18 +134,28 @@ Creates `benchmarks/comparison_chart.png` with a bar chart.
 
 ## Expected Results
 
-**Note:** These are for exact deduplication only (SHA256 hashing).
+### Exact Deduplication (SHA256 hashing)
 
 | Tool | Expected Time | Throughput | Notes |
 |------|--------------|------------|-------|
-| **Pandas** | 45-90s | ~2K-3K rec/s | In-memory, single-threaded |
-| **Polars** | 15-30s | ~5K-10K rec/s | Lazy eval, Rust internals |
-| **Streaming** | 30-60s | ~3K-5K rec/s | Memory-efficient |
-| **Rust (yours)** | **3-10s** | **15K-50K rec/s** | **10-20x faster** |
+| **Pandas** | 10-20s | ~10K-15K rec/s | In-memory, single-threaded |
+| **Polars** | 7-10s | ~15K-20K rec/s | Lazy eval, Rust internals |
+| **Streaming** | 9-12s | ~13K-17K rec/s | Memory-efficient |
+| **Rust (yours)** | **3-5s** | **30K-50K rec/s** | **3-5x faster** |
 
-**For fuzzy deduplication (MinHash + LSH):**
-- Python implementations would be 5-10x slower
-- Your Rust tool maintains similar performance (581 rec/s on 157K dataset)
+### Fuzzy Deduplication (MinHash + LSH)
+
+| Tool | Expected Time | Throughput | Notes |
+|------|--------------|------------|-------|
+| **Pandas** | 100-300s | ~500-1.5K rec/s | Python MinHash + LSH |
+| **Polars** | 80-200s | ~800-2K rec/s | Still Python MinHash |
+| **Streaming** | 90-250s | ~600-1.7K rec/s | Memory-efficient |
+| **Rust (yours)** | **20-60s** | **2.5K-8K rec/s** | **5-10x faster** |
+
+**Why fuzzy is slower:**
+- MinHash computation is CPU-intensive (128 permutations)
+- LSH index queries are O(log n) per record
+- Python MinHash is pure Python, much slower than Rust
 
 ## File Structure
 
@@ -107,25 +163,37 @@ Creates `benchmarks/comparison_chart.png` with a bar chart.
 benchmarks/
 ├── README.md                          # This file
 ├── requirements.txt                   # Python dependencies
-├── run_comparison.sh                  # Full benchmark suite
-├── hyperfine_comparison.sh            # Hyperfine benchmark
+├── run_comparison.sh                  # Exact dedup benchmark suite
+├── run_fuzzy_comparison.sh            # Fuzzy dedup benchmark suite
+├── hyperfine_comparison.sh            # Hyperfine exact benchmark
+├── hyperfine_fuzzy_comparison.sh      # Hyperfine fuzzy benchmark
 ├── visualize_results.py               # Create charts
 ├── baselines/
-│   ├── pandas_dedup.py                # Pandas baseline
-│   ├── polars_dedup.py                # Polars baseline
-│   └── streaming_dedup.py             # Streaming baseline
-└── output/                            # Output files (generated)
-    ├── pandas_output.parquet
-    ├── polars_output.parquet
-    ├── streaming_output.parquet
-    └── rust_output.parquet
+│   ├── pandas_dedup.py                # Pandas exact dedup
+│   ├── polars_dedup.py                # Polars exact dedup
+│   ├── streaming_dedup.py             # Streaming exact dedup
+│   ├── pandas_fuzzy_dedup.py          # Pandas fuzzy dedup (MinHash)
+│   ├── polars_fuzzy_dedup.py          # Polars fuzzy dedup (MinHash)
+│   └── streaming_fuzzy_dedup.py       # Streaming fuzzy dedup (MinHash)
+├── output/                            # Exact dedup output (generated)
+│   ├── pandas_output.parquet
+│   ├── polars_output.parquet
+│   ├── streaming_output.parquet
+│   └── rust_output.parquet
+└── output_fuzzy/                      # Fuzzy dedup output (generated)
+    ├── pandas_fuzzy_output.parquet
+    ├── polars_fuzzy_output.parquet
+    ├── streaming_fuzzy_output.parquet
+    └── rust_fuzzy_output.parquet
 ```
 
 ## Troubleshooting
 
 **Import errors:**
 ```bash
-pip3 install pandas polars pyarrow
+pip3 install pandas polars pyarrow datasketch
+# Or from requirements.txt
+pip3 install -r benchmarks/requirements.txt
 ```
 
 **Permission denied:**

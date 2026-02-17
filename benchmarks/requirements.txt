@@ -2,3 +2,4 @@ pandas>=2.0.0
 polars>=0.20.0
 pyarrow>=14.0.0
 matplotlib>=3.7.0
+datasketch>=1.6.0
