@@ -315,7 +315,7 @@ async fn fuzzy_dedup(
     stats_only: bool,
     json_output: bool,
 ) -> Result<()> {
-    use dataset_dedup_core::fuzzy_dedup::FuzzyDeduplicator;
+    use dataset_dedup_core::fuzzy_dedup::{FuzzyDeduplicator, FuzzyDedupConfig};
     use dataset_dedup_formats::open_dataset;
 
     info!("Starting fuzzy deduplication");
@@ -327,7 +327,14 @@ async fn fuzzy_dedup(
     info!("  Field: {}", field);
 
     let mut reader = open_dataset(&input)?;
-    let mut deduplicator = FuzzyDeduplicator::new(threshold);
+
+    // Create config with the specified field
+    let config = FuzzyDedupConfig {
+        similarity_threshold: threshold,
+        text_field: field.clone(),
+        ..Default::default()
+    };
+    let mut deduplicator = FuzzyDeduplicator::with_config(config);
 
     let mut total = 0;
     let mut unique = 0;
