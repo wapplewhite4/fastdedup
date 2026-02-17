@@ -30,6 +30,7 @@ Usage:
 import pyarrow.parquet as pq
 import pyarrow as pa
 import pyarrow.compute as pc
+import itertools
 import numpy as np
 import time
 import sys
@@ -147,10 +148,11 @@ def optimized_fuzzy_dedup(
     total_rows = parquet_file.metadata.num_rows  # known upfront from Parquet metadata
     print(f"  Total rows: {total_rows:,}")
 
+    _spinner = itertools.cycle('|/-\\')
+
     with Pool(processes=num_workers) as pool:
         for batch in parquet_file.iter_batches(batch_size=batch_size):
             n = len(batch)
-            total_records += n
 
             # Extract text column as a Python list directly from Arrow
             # (no pandas conversion, no Series overhead)
@@ -158,10 +160,32 @@ def optimized_fuzzy_dedup(
             texts = text_col.to_pylist()
 
             # --- PARALLEL PHASE ---
-            # Compute MinHash signatures for every record in this batch
-            # using all available CPU cores.
+            # map_async returns immediately so we can spin while workers run.
+            # This keeps the terminal alive during the slow first-batch startup
+            # (worker process spawning + module imports can take 10-30 seconds).
             worker_args = [(t if t is not None else '', num_perm) for t in texts]
-            all_hashvalues = pool.map(_compute_char3_minhash, worker_args)
+            async_result = pool.map_async(_compute_char3_minhash, worker_args)
+
+            while not async_result.ready():
+                elapsed = time.time() - start
+                rate = total_records / elapsed if elapsed > 0 and total_records > 0 else 0
+                eta_str = (
+                    _fmt_duration((total_rows - total_records) / rate)
+                    if rate > 0 else '?:??'
+                )
+                sys.stdout.write(
+                    f"\r  {next(_spinner)} Hashing...  "
+                    f"{total_records:,}/{total_rows:,} | "
+                    f"{_fmt_duration(elapsed)} elapsed | "
+                    f"ETA {eta_str} | "
+                    f"{rate:,.0f} rec/s | "
+                    f"{duplicates:,} dupes"
+                )
+                sys.stdout.flush()
+                async_result.wait(timeout=0.12)
+
+            all_hashvalues = async_result.get()
+            total_records += n
 
             # --- SERIAL PHASE ---
             # LSH query/insert must be sequential: the decision for record N
@@ -186,6 +210,7 @@ def optimized_fuzzy_dedup(
             if len(filtered) > 0:
                 output_batches.append(filtered)
 
+            # Full progress bar after each completed batch
             _print_progress(total_records, total_rows, time.time() - start, duplicates)
 
     # Move to next line after the progress bar
