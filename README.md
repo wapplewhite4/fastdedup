@@ -259,7 +259,7 @@ P(candidate) = 1 - (1 - s^r)^b
 
 Default configuration: **16 bands x 8 rows = 128 hashes**.
 
-| True similarity | P(candidate) | Behaviour |
+| True similarity | P(candidate) | Behavior |
 |----------------|-------------|-----------|
 | 0.2 | ~0.0004% | Almost never flagged |
 | 0.5 | ~0.5% | Rarely flagged |
