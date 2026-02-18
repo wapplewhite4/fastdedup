@@ -4,6 +4,7 @@
 //! `ProgressMsg` updates over an `mpsc` channel.  The TUI polls
 //! the channel every 50 ms without blocking the event loop.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -79,6 +80,7 @@ fn run_fuzzy_inner(
     let mut reader = open_dataset(&input)?;
     let total_records = reader.total_records().map(|r| r as u64);
 
+    let field_name = field.clone();
     let config = FuzzyDedupConfig {
         similarity_threshold: threshold,
         text_field: field,
@@ -92,6 +94,9 @@ fn run_fuzzy_inner(
 
     let mut clean_writer = BufWriter::new(File::create(&output)?);
     let mut removed_writer = BufWriter::new(File::create(&removed_output)?);
+
+    // Maps row_id → field text for kept records to populate `matched_value`.
+    let mut field_values: HashMap<usize, String> = HashMap::new();
 
     let mut total: usize = 0;
     let mut unique: usize = 0;
@@ -116,39 +121,39 @@ fn run_fuzzy_inner(
             .collect();
 
         for (record, sig_opt) in batch.into_iter().zip(signatures) {
-            let dups = sig_opt.and_then(|sig| deduplicator.process_prepared(total, sig));
+            let row_id = total;
+            let dups = sig_opt.and_then(|sig| deduplicator.process_prepared(row_id, sig));
             total += 1;
+
+            let field_text = record
+                .data
+                .get(&field_name)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
 
             match dups {
                 None => {
                     unique += 1;
+                    field_values.insert(row_id, field_text);
                     writeln!(clean_writer, "{}", serde_json::to_string(&record.data)?)?;
                 }
                 Some(ref dup_matches) => {
                     duplicates += 1;
-                    let mut annotated = record.data.clone();
-                    if let serde_json::Value::Object(ref mut map) = annotated {
-                        let ids: Vec<_> = dup_matches
-                            .iter()
-                            .map(|(id, _)| serde_json::json!(id))
-                            .collect();
-                        let scores: Vec<_> = dup_matches
-                            .iter()
-                            .map(|(_, sim)| {
-                                let rounded = (sim * 10_000.0).round() / 10_000.0;
-                                serde_json::json!(rounded)
-                            })
-                            .collect();
-                        map.insert(
-                            "__duplicate_of".to_string(),
-                            serde_json::Value::Array(ids),
-                        );
-                        map.insert(
-                            "__similarity_scores".to_string(),
-                            serde_json::Value::Array(scores),
-                        );
+                    for &(dup_id, sim) in dup_matches {
+                        let matched_value =
+                            field_values.get(&dup_id).map(|s| s.as_str()).unwrap_or("");
+                        let entry = serde_json::json!({
+                            "row_id": row_id,
+                            "duplicate_of_row_id": dup_id,
+                            "field": field_name,
+                            "value": field_text,
+                            "matched_value": matched_value,
+                            "similarity": (sim * 10_000.0).round() / 10_000.0,
+                            "threshold": threshold,
+                        });
+                        writeln!(removed_writer, "{}", serde_json::to_string(&entry)?)?;
                     }
-                    writeln!(removed_writer, "{}", serde_json::to_string(&annotated)?)?;
                 }
             }
 

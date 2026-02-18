@@ -10,6 +10,7 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
 use rayon::prelude::*;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -379,7 +380,6 @@ async fn fuzzy_dedup(
 ) -> Result<()> {
     use dataset_dedup_core::fuzzy_dedup::{FuzzyDeduplicator, FuzzyDedupConfig};
     use dataset_dedup_formats::open_dataset;
-    use serde_json::Value;
 
     // Resolve LSH band parameters.
     // Default 16 bands × 8 rows = 128 hashes.
@@ -424,12 +424,16 @@ async fn fuzzy_dedup(
     let mut unique = 0;
     let mut duplicates = 0;
 
+    // Maps row_id → extracted field text for every kept record so we can
+    // populate `matched_value` in the removed log without re-reading the file.
+    let mut field_values: HashMap<usize, String> = HashMap::new();
+
     // Open output writers unless this is a dry-run or stats-only pass.
     //
-    // clean_writer  → the path the user specified (JSONL, one record per line)
-    // removed_writer → auto-derived <stem>.removed.jsonl; each record gets an
-    //                  extra `__duplicate_of` field listing the index(es) of the
-    //                  first-seen record(s) it matched, for QA inspection.
+    // clean_writer   → the path the user specified (JSONL, one record per line)
+    // removed_writer → auto-derived <stem>.removed.jsonl; one JSON object per
+    //                  duplicate relationship with row ids, field values, and
+    //                  similarity score for easy downstream inspection.
     let write_output = !dry_run && !stats_only;
     let removed_output = removed_path(&output);
 
@@ -477,17 +481,30 @@ async fn fuzzy_dedup(
 
         // Serial phase: LSH query + insert (order matters for dedup correctness)
         for (record, sig_opt) in batch.into_iter().zip(signatures) {
-            // `total` is the 0-based record index so that __duplicate_of IDs
-            // correspond directly to pandas/numpy df.iloc[id] lookups.
+            // Capture the 0-based row id before incrementing so it matches
+            // pandas df.iloc[row_id] on the original file.
+            let row_id = total;
             let dups = match sig_opt {
-                Some(sig) => deduplicator.process_prepared(total, sig),
+                Some(sig) => deduplicator.process_prepared(row_id, sig),
                 None => None, // missing/empty text field — treat as unique
             };
             total += 1;
 
+            // Extract the compared field value once; used for both the
+            // field_values cache (kept records) and the removed log.
+            let field_text = record
+                .data
+                .get(&field)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
             match dups {
                 None => {
                     unique += 1;
+                    if write_output {
+                        field_values.insert(row_id, field_text);
+                    }
                     if let Some(ref mut w) = clean_writer {
                         writeln!(w, "{}", serde_json::to_string(&record.data)?)?;
                     }
@@ -495,27 +512,21 @@ async fn fuzzy_dedup(
                 Some(ref dup_matches) => {
                     duplicates += 1;
                     if let Some(ref mut w) = removed_writer {
-                        // Clone the record and annotate it with which original(s) it
-                        // matched and the exact MinHash similarity for each, so
-                        // reviewers can verify why it was removed.
-                        let mut annotated = record.data.clone();
-                        if let Value::Object(ref mut map) = annotated {
-                            let ids: Vec<Value> = dup_matches
-                                .iter()
-                                .map(|(id, _)| Value::Number((*id).into()))
-                                .collect();
-                            let scores: Vec<Value> = dup_matches
-                                .iter()
-                                .map(|(_, sim)| {
-                                    // Round to 4 decimal places for readability.
-                                    let rounded = (sim * 10_000.0).round() / 10_000.0;
-                                    serde_json::json!(rounded)
-                                })
-                                .collect();
-                            map.insert("__duplicate_of".to_string(), Value::Array(ids));
-                            map.insert("__similarity_scores".to_string(), Value::Array(scores));
+                        // One log line per duplicate relationship.
+                        for &(dup_id, sim) in dup_matches {
+                            let matched_value =
+                                field_values.get(&dup_id).map(|s| s.as_str()).unwrap_or("");
+                            let entry = serde_json::json!({
+                                "row_id": row_id,
+                                "duplicate_of_row_id": dup_id,
+                                "field": field,
+                                "value": field_text,
+                                "matched_value": matched_value,
+                                "similarity": (sim * 10_000.0).round() / 10_000.0,
+                                "threshold": threshold,
+                            });
+                            writeln!(w, "{}", serde_json::to_string(&entry)?)?;
                         }
-                        writeln!(w, "{}", serde_json::to_string(&annotated)?)?;
                     }
                 }
             }
