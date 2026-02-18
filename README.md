@@ -1,516 +1,563 @@
-# Dataset Deduplicator
+# dataset-dedup
 
-High-performance Rust-based tool for deduplicating and cleaning AI training datasets. Designed to process terabyte-scale data with constant memory usage through streaming architecture.
+High-performance Rust tool for deduplicating and cleaning AI training datasets.
+Handles exact and fuzzy (near-duplicate) detection on datasets with millions of
+records, reading JSONL, gzip-compressed JSONL, and Apache Parquet.
 
-## Features
+## Table of contents
 
-- **Memory-Efficient Streaming**: Process datasets of any size with constant memory usage
-- **Multiple Format Support**: JSONL, compressed JSONL (.gz), and Parquet files
-- **High Performance**: Optimized for maximum throughput with parallel processing
-- **Modular Architecture**: Clean separation of concerns with workspace-based design
-- **Progress Tracking**: Real-time progress indicators for long-running operations
-- **Column Projection**: Read only the columns you need for faster processing
-
-## Project Structure
-
-```
-dataset-dedup/
-├── Cargo.toml              # Workspace configuration
-├── crates/
-│   ├── core/               # Core deduplication logic
-│   │   ├── hash.rs         # Hashing utilities
-│   │   ├── dedup.rs        # Deduplication algorithms
-│   │   └── error.rs        # Error types
-│   ├── formats/            # File format parsers
-│   │   ├── jsonl.rs        # JSONL streaming reader
-│   │   ├── parquet_reader.rs  # Parquet batch reader
-│   │   ├── reader.rs       # Unified format abstraction
-│   │   └── record.rs       # Record data structure
-│   ├── filters/            # Quality filters
-│   │   └── length_filter.rs   # Length-based filtering
-│   └── cli/                # CLI interface
-│       └── main.rs         # Command-line application
-└── README.md
-```
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Commands](#commands)
+- [Algorithms](#algorithms)
+- [Configuration](#configuration)
+- [Library usage](#library-usage)
+- [Benchmarks](#benchmarks)
+- [Project structure](#project-structure)
+- [Testing](#testing)
+- [License](#license)
 
 ## Installation
 
-### Prerequisites
-
-- Rust 1.70 or later
-- Cargo (comes with Rust)
-
-### Build from Source
+Requires Rust 1.70+.
 
 ```bash
-# Clone the repository
 git clone <repository-url>
 cd dataset-dedup
-
-# Build the project
 cargo build --release
-
-# The binary will be available at:
-# target/release/dataset-dedup
+# binary: target/release/dataset-dedup
 ```
 
-## Usage
-
-The CLI provides several commands for working with datasets:
-
-### Inspect a Dataset
-
-View the first N records from a dataset:
+## Quick start
 
 ```bash
-dataset-dedup inspect <FILE> -n 10
+# Inspect a dataset
+dataset-dedup inspect data.jsonl -n 5
+
+# Count records
+dataset-dedup count data.parquet
+
+# Exact dedup on the "text" field
+dataset-dedup exact-dedup -i data.jsonl -o deduped.jsonl --field text
+
+# Fuzzy dedup at 85% similarity
+dataset-dedup fuzzy-dedup -i data.jsonl -o deduped.jsonl --threshold 0.85 --field text
+
+# Full pipeline from a config file
+dataset-dedup pipeline -i data.jsonl -o clean.jsonl --config pipeline.yaml
+
+# Interactive terminal UI
+dataset-dedup tui
 ```
 
-Supported formats are automatically detected by file extension:
-- `.jsonl` or `.json` - JSON Lines format
-- `.gz` - Gzip-compressed JSON Lines
-- `.parquet` - Apache Parquet format
+## Commands
 
-### Count Records
+### Global flags
 
-Count total records in a dataset:
+| Flag | Description |
+|------|-------------|
+| `-v, --verbose` | Enable DEBUG-level logging |
+| `--json` | Output statistics as JSON |
 
-```bash
+### `exact-dedup`
+
+Remove exact duplicates using content hashing.
+
+```
+dataset-dedup exact-dedup [OPTIONS] -i <INPUT> -o <OUTPUT>
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `-i, --input` | required | Input file (JSONL, JSONL.gz, or Parquet) |
+| `-o, --output` | required | Output file |
+| `-f, --field` | full record | Field to hash. Omit to hash the entire JSON record |
+| `-n, --normalize` | off | Lowercase + trim before hashing |
+| `--dry-run` | off | Print statistics without writing output |
+| `--stats-only` | off | Print statistics only |
+
+**How it works.** Each record is hashed with `ahash`. A Bloom filter (1% false-positive
+rate) provides a fast negative check; positives are confirmed against an in-memory
+`AHashSet`. Four hash strategies are available via the library API:
+
+| Strategy | Hashes |
+|----------|--------|
+| `FullContent` | Entire JSON record |
+| `Field(name)` | Single field value |
+| `Normalized(name)` | Field value after lowercase + trim |
+| `MultiField(names)` | Concatenation of multiple fields |
+
+### `fuzzy-dedup`
+
+Remove near-duplicate records using MinHash + LSH.
+
+```
+dataset-dedup fuzzy-dedup [OPTIONS] -i <INPUT> -o <OUTPUT>
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `-i, --input` | required | Input file |
+| `-o, --output` | required | Output file |
+| `-t, --threshold` | `0.8` | Jaccard similarity threshold (0.0 -- 1.0) |
+| `-F, --field` | `text` | JSON field to compare |
+| `--num-hashes` | `128` | Number of MinHash permutations |
+| `--shingle-size` | `3` | n-gram size (characters or words) |
+| `--word-shingles` | `false` | Use word n-grams instead of character n-grams |
+| `--bands` | `16` | Number of LSH bands |
+| `--rows-per-band` | `8` | Rows per LSH band (`bands * rows_per_band` must equal `num_hashes`) |
+| `--dry-run` | off | Print statistics without writing output |
+| `--stats-only` | off | Print statistics only |
+
+**Output files.** For an output path `deduped.jsonl`, the command writes:
+
+- `deduped.jsonl` -- unique (kept) records
+- `deduped.removed.jsonl` -- one JSON object per removed duplicate:
+
+```json
+{
+  "row_id": 42,
+  "duplicate_of_row_id": 7,
+  "field": "text",
+  "value": "the removed record's text",
+  "matched_value": "the kept record's text",
+  "similarity": 0.92,
+  "threshold": 0.8
+}
+```
+
+### `filter`
+
+Apply quality and language filters.
+
+```
+dataset-dedup filter -i <INPUT> -o <OUTPUT> [--config filters.yaml]
+```
+
+### `pipeline`
+
+Run a full dedup + filter pipeline from a YAML/TOML config.
+
+```
+dataset-dedup pipeline -i <INPUT> -o <OUTPUT> --config pipeline.yaml [--dry-run]
+```
+
+### `inspect`
+
+Print the first N records from a dataset.
+
+```
+dataset-dedup inspect <FILE> [-n 10]
+```
+
+### `count`
+
+Count records in a dataset.
+
+```
 dataset-dedup count <FILE>
 ```
 
-### Deduplicate a Dataset
+### `completions`
 
-Remove duplicate records based on a specific field:
+Generate shell completions.
 
 ```bash
-dataset-dedup dedup <INPUT> -o <OUTPUT> --field text
+dataset-dedup completions bash > ~/.local/share/bash-completion/completions/dataset-dedup
+dataset-dedup completions zsh  > ~/.zsh/completions/_dataset-dedup
+dataset-dedup completions fish > ~/.config/fish/completions/dataset-dedup.fish
 ```
 
-Options:
-- `-o, --output <OUTPUT>`: Output file path
-- `-f, --field <FIELD>`: Field to use for deduplication (default: "text")
-- `-v, --verbose`: Enable verbose logging
+### `tui`
 
-## Implementation Phases
+Launch an interactive terminal UI for guided deduplication.
 
-### Phase 1: Project Setup & Core Infrastructure ✅
+## Algorithms
 
-- [x] Cargo workspace with modular architecture
-- [x] Core crates (core, formats, filters, cli)
-- [x] Error handling with anyhow and thiserror
-- [x] Basic deduplication tracker
-- [x] Hashing utilities with seahash
+### Exact deduplication
 
-### Phase 2: File Format Readers ✅
+Records are hashed with [ahash](https://github.com/tkaitchuck/ahash) (a fast,
+non-cryptographic hash). The deduplicator maintains:
 
-#### Phase 2A: JSONL Streaming Reader ✅
+1. **Bloom filter** -- probabilistic set membership with ~1% false-positive
+   rate. Records that fail the Bloom check are guaranteed unique and skip the
+   hash-set lookup entirely.
+2. **AHashSet** -- definitive set of seen hashes. Only consulted when the Bloom
+   filter returns a positive.
 
-- [x] Streaming line-by-line reading with BufReader
-- [x] Automatic gzip decompression support
-- [x] Malformed JSON handling (skip and log)
-- [x] Progress tracking (lines processed, bytes read)
-- [x] Optional field extraction for performance
-- [x] Memory-constant regardless of file size
-- [x] Comprehensive unit tests
+This two-layer design keeps the average lookup at ~1 hash + 1 bit-probe for
+unique records.
 
-#### Phase 2B: Parquet Reader ✅
+For datasets exceeding available memory a **tiered hash storage** is available:
+an in-memory hot cache (default 10M hashes, ~160 MB) backed by an on-disk
+[sled](https://github.com/spacejam/sled) database. Eviction uses an LRU-like
+policy (evict 10% of the hot set at a time); frequently accessed cold hashes are
+promoted back.
 
-- [x] Batch-based reading using arrow-rs
-- [x] RecordBatch to JSON conversion
-- [x] Column projection (read specific columns only)
-- [x] Configurable batch size
-- [x] Schema introspection
-- [x] Support for common data types (string, int, float, bool, list, struct)
-- [x] Memory-efficient streaming
-- [x] Comprehensive unit tests
+### Fuzzy deduplication (MinHash + LSH)
 
-#### Phase 2C: Unified Format Abstraction ✅
+Fuzzy dedup detects records whose text is *similar but not identical*. The
+pipeline for each record is:
 
-- [x] DatasetReader trait for common interface
-- [x] Record type with lazy hash computation
-- [x] Factory function for automatic format detection
-- [x] Progress tracking across all formats
-- [x] Integration tests
-
-## Library Usage
-
-You can use the individual crates as libraries in your own projects:
-
-### Reading JSONL Files
-
-```rust
-use dataset_dedup_formats::jsonl::JsonlReader;
-
-let reader = JsonlReader::open("dataset.jsonl.gz")?;
-for result in reader {
-    let record = result?;
-    println!("{}", record.data);
-}
+```
+extract field -> normalize text -> compute MinHash signature -> query LSH index -> verify candidates
 ```
 
-### Reading Parquet Files
+#### 1. Text normalization
 
-```rust
-use dataset_dedup_formats::parquet_reader::ParquetReader;
+Text is preprocessed before hashing. Three presets are available:
 
-let reader = ParquetReader::open("dataset.parquet")?
-    .with_columns(vec!["text".to_string(), "id".to_string()])
-    .with_batch_size(8192);
+| Preset | Lowercase | Remove punctuation | Collapse whitespace | Unicode NFKD |
+|--------|-----------|-------------------|---------------------|-------------|
+| **Aggressive** | yes | yes | yes | yes |
+| **Balanced** (default) | yes | yes | yes | no |
+| **Conservative** | yes | no | yes | no |
 
-for result in reader {
-    let record = result?;
-    println!("{}", record.data);
-}
+#### 2. Shingling
+
+Text is split into overlapping n-grams (*shingles*). Two modes:
+
+- **Character n-grams** (default, `--word-shingles false`): e.g. `"the"`,
+  `"he "`, `"e q"` for shingle size 3. Matches Python
+  [datasketch](https://ekzhu.com/datasketch/) behaviour.
+- **Word n-grams** (`--word-shingles true`): e.g. `"the quick"`,
+  `"quick brown"` for shingle size 2. More discriminative for natural language
+  (fewer false positives from common character sequences like "the", "ing").
+
+#### 3. MinHash signatures
+
+Each shingle set is compressed into a fixed-size signature of `num_hashes`
+(default 128) minimum hash values. The signature preserves the *Jaccard
+similarity* between any two documents:
+
+```
+J(A, B) = |A ∩ B| / |A ∪ B| ≈ (# matching signature positions) / num_hashes
 ```
 
-### Unified Reader Interface
+Hash functions use the form `h(x) = (a * x + b) mod p` with a large prime
+`p = 2^31 - 1` and deterministic coefficients (seeded LCG).
+
+#### 4. Locality Sensitive Hashing (LSH)
+
+The 128-element signature is divided into **bands** of consecutive rows. Two
+documents become *candidates* if they match in all rows of at least one band.
+
+With `b` bands of `r` rows each, the probability that two documents with true
+Jaccard similarity `s` become candidates is:
+
+```
+P(candidate) = 1 - (1 - s^r)^b
+```
+
+Default configuration: **16 bands x 8 rows = 128 hashes**.
+
+| True similarity | P(candidate) | Behaviour |
+|----------------|-------------|-----------|
+| 0.2 | ~0.0004% | Almost never flagged |
+| 0.5 | ~0.5% | Rarely flagged |
+| 0.7 | ~18% | Sometimes flagged |
+| 0.8 | ~66% | Usually flagged |
+| 0.9 | ~97% | Almost always flagged |
+| 1.0 | 100% | Always flagged |
+
+Compared to a 32 x 4 configuration, 16 x 8 reduces false positives by ~1000x at
+low similarity while keeping ~95% true-positive rate at `s = 0.8`.
+
+#### 5. Candidate verification
+
+Each candidate pair returned by LSH is verified by computing the exact MinHash
+Jaccard estimate. Only pairs meeting the `--threshold` are marked as duplicates.
+
+#### LSH index performance optimizations
+
+The LSH index is tuned for datasets with millions of records:
+
+1. **Pre-hashed u64 band keys.** Band signatures (`rows_per_band` hash values)
+   are reduced to a single `u64` via ahash before HashMap lookup. This
+   eliminates a `Vec<u64>` allocation per lookup and makes key comparison O(1)
+   instead of O(rows_per_band).
+
+2. **ahash-backed HashMaps.** All band tables use ahash (`RandomState`) instead
+   of the default SipHash hasher. Since keys are not adversarially controlled,
+   this is ~30% faster.
+
+3. **Vec-backed signature storage.** Signatures are stored in a
+   `Vec<Option<MinHashSignature>>` indexed by document ID rather than a
+   `HashMap`. Since IDs are sequential 0..N this gives O(1) access with better
+   cache locality.
+
+4. **Capped candidate verification.** Queries return at most 200 candidates,
+   bounding worst-case verification cost. Most true duplicates appear early
+   (inserted close in time), so recall loss is negligible.
+
+5. **Capacity-hint pre-allocation.** When the record count is known in advance
+   (e.g. from Parquet metadata), `LSHIndex::with_capacity()` pre-allocates all
+   internal structures to avoid rehashing during ingestion.
+
+6. **Periodic band-bucket compaction.** IDs that were removed as duplicates
+   still occupy band buckets, inflating candidate lists. The `compact()` method
+   prunes stale entries; `query()` also inline-filters stale IDs.
+
+**Algorithmic complexity per record (after optimizations):**
+
+| Step | Cost |
+|------|------|
+| Band key computation | 16 u64 hashes |
+| Band lookups | 16 ahash HashMap lookups |
+| Candidate verification | min(candidates, 200) x 128 comparisons |
+| Signature storage | O(1) Vec index |
+
+### Quality filtering
+
+Quality scores are computed across multiple metrics. A record must pass all
+enabled checks:
+
+| Metric | Default | Description |
+|--------|---------|-------------|
+| `min_length` | 50 | Minimum character count |
+| `max_length` | 100,000 | Maximum character count |
+| `min_word_count` | 10 | Minimum word count |
+| `max_word_count` | 10,000 | Maximum word count |
+| `max_repetition_ratio` | 0.3 | Maximum fraction of repeated 3-4 word n-grams |
+| `min_unique_words_ratio` | 0.3 | Minimum vocabulary diversity |
+| `max_url_ratio` | 0.1 | Maximum fraction of URL characters |
+| `max_special_char_ratio` | 0.3 | Maximum non-alphanumeric ratio |
+| `min_avg_word_length` | 2.5 | Minimum average word length |
+| `reject_html` | true | Reject records containing HTML tags |
+| `filter_profanity` | false | Enable profanity filter |
+
+Three presets are available: **default**, **strict** (tighter thresholds), and
+**lenient** (more permissive).
+
+### Language detection
+
+Language detection uses [whatlang](https://github.com/grstrainern/whatlang) and supports 20+ languages via ISO 639-3 codes:
+
+`eng`, `spa`, `fra`, `deu`, `por`, `rus`, `jpn`, `zho`, `ara`, `hin`, `ita`,
+`nld`, `pol`, `tur`, `vie`, `kor`, `swe`, `dan`, `fin`, `nor`, ...
+
+Configuration options:
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `allowed_languages` | `["eng"]` | ISO 639-3 codes to accept |
+| `confidence_threshold` | 0.5 | Minimum detection confidence (0.0 -- 1.0) |
+| `min_text_length` | 50 | Skip detection for texts shorter than this |
+
+Code-heavy text is detected via keyword heuristics (`function`, `class`,
+`import`, `return`, etc.) and can be accepted with the `"code"` pseudo-language.
+
+## Configuration
+
+Pipeline and filter commands accept YAML or TOML config files. Example
+(`examples/config.yaml`):
+
+```yaml
+input:
+  path: "raw_dataset.jsonl.gz"
+  format: jsonl
+
+output:
+  path: "clean_dataset.jsonl"
+  format: jsonl
+  compression: none          # none | gzip | zstd
+
+deduplication:
+  exact:
+    field: "text"            # null = full record
+    normalize: true
+
+  fuzzy:
+    threshold: 0.85
+    field: "text"
+
+filters:
+  language:
+    allowed_languages: ["eng", "code"]
+    confidence_threshold: 0.7
+    min_text_length: 50
+
+  quality:
+    min_length: 100
+    max_length: 10000
+    min_word_count: 20
+    max_word_count: 2000
+    max_repetition_ratio: 0.3
+    min_unique_words_ratio: 0.3
+    max_url_ratio: 0.1
+    max_special_char_ratio: 0.3
+    reject_html: true
+    filter_profanity: false
+    min_avg_word_length: 2.5
+```
+
+Additional example configs in `examples/`:
+
+| File | Use case |
+|------|----------|
+| `config.yaml` | Balanced English-language pipeline |
+| `config.toml` | Same pipeline in TOML format |
+| `config-multilingual.yaml` | Top-10 languages with lenient quality |
+| `config-strict.yaml` | Aggressive quality filtering |
+| `filters-only.yaml` | Language + quality filters, no dedup |
+
+## Supported formats
+
+| Extension | Format | Notes |
+|-----------|--------|-------|
+| `.jsonl`, `.json` | JSON Lines | Streaming, line-by-line |
+| `.jsonl.gz`, `.json.gz` | Gzip JSONL | Auto-decompressed |
+| `.parquet` | Apache Parquet | Batch reading, column projection |
+
+Format is auto-detected from the file extension.
+
+## Library usage
+
+The workspace crates can be used as libraries independently.
+
+### Reading datasets
 
 ```rust
 use dataset_dedup_formats::{open_dataset, DatasetReader};
 
-// Automatically detects format from file extension
-let mut reader = open_dataset("dataset.parquet")?;
-
+let mut reader = open_dataset("data.parquet")?;
 for result in reader.by_ref() {
     let record = result?;
-    // Process record
+    println!("{}", record.data);
 }
-
 println!("Processed {} records", reader.records_processed());
 ```
 
-### Deduplication
-
-```rust
-use dataset_dedup_core::dedup::DedupTracker;
-use dataset_dedup_formats::open_dataset;
-
-let mut tracker = DedupTracker::new();
-let reader = open_dataset("dataset.jsonl")?;
-
-for result in reader {
-    let mut record = result?;
-    let hash = record.get_hash();
-
-    if !tracker.is_duplicate(hash) {
-        // Process unique record
-    }
-}
-
-println!("Found {} unique records", tracker.unique_count());
-```
-
-### Exact Deduplication with Hash Strategies
-
-```rust
-use dataset_dedup_core::exact_dedup::{ExactDeduplicator, HashStrategy};
-use dataset_dedup_formats::open_dataset;
-
-// Deduplicate based on a specific field
-let mut dedup = ExactDeduplicator::new(HashStrategy::Field("text".to_string()));
-
-let reader = open_dataset("dataset.jsonl")?;
-for result in reader {
-    let record = result?;
-
-    if !dedup.is_duplicate(&record.data) {
-        // Process unique record
-        println!("{}", record.data);
-    }
-}
-
-let stats = dedup.stats();
-println!("Total: {}, Unique: {}, Duplicates: {}, Rate: {:.2}%",
-    stats.total_seen, stats.unique_count, stats.duplicates_found, stats.dedup_rate());
-```
-
-### Normalized Deduplication
+### Exact dedup
 
 ```rust
 use dataset_dedup_core::exact_dedup::{ExactDeduplicator, HashStrategy};
 
-// Deduplicate with normalization (case-insensitive, trimmed)
-let mut dedup = ExactDeduplicator::new(
-    HashStrategy::Normalized("text".to_string())
-);
-
-// These will be treated as duplicates:
-// "  Hello World  ", "hello world", "HELLO WORLD"
+let mut dedup = ExactDeduplicator::new(HashStrategy::Normalized("text".into()));
+// dedup.is_duplicate(&record.data) returns true for duplicates
 ```
 
-### Memory-Efficient Tiered Storage
+### Fuzzy dedup
 
-For datasets with billions of records that exceed memory:
+```rust
+use dataset_dedup_core::fuzzy_dedup::{FuzzyDeduplicator, FuzzyDedupConfig};
+
+let config = FuzzyDedupConfig {
+    similarity_threshold: 0.85,
+    num_hashes: 128,
+    shingle_size: 2,
+    word_shingles: true,
+    num_bands: 16,
+    rows_per_band: 8,
+    text_field: "text".into(),
+};
+let mut dedup = FuzzyDeduplicator::with_config(config);
+
+// Single-pass: query + insert in one call
+match dedup.process_record(id, &record) {
+    Some(duplicate_ids) => { /* record is a duplicate */ }
+    None                => { /* record is unique, added to index */ }
+}
+```
+
+### Tiered hash storage (for billion-scale datasets)
 
 ```rust
 use dataset_dedup_core::hash_storage::{TieredHashStorage, TieredStorageConfig};
 
 let config = TieredStorageConfig {
-    max_hot_size: 10_000_000,  // Keep 10M hashes in memory
-    db_path: "./dedup_storage".to_string(),
-    sync_on_write: false,  // Async writes for performance
+    max_hot_size: 10_000_000,  // 10M hashes in memory (~160 MB)
+    db_path: "./cold_storage".into(),
+    sync_on_write: false,
 };
-
 let mut storage = TieredHashStorage::with_config(config)?;
-
-// Process billions of records with constant memory usage
-for hash in record_hashes {
-    if !storage.contains(hash)? {
-        storage.insert(hash)?;
-        // Process unique record
-    }
-}
-
-println!("Hot cache: {}, Cold storage: {}",
-    storage.stats().hot_count, storage.stats().cold_count);
+// storage.contains(hash)? / storage.insert(hash)?
 ```
 
-### Fuzzy Deduplication (Near-Duplicates)
-
-Detect similar documents using MinHash and LSH:
-
-```rust
-use dataset_dedup_core::fuzzy_dedup::FuzzyDeduplicator;
-use dataset_dedup_formats::open_dataset;
-
-// Create fuzzy deduplicator with 70% similarity threshold
-let mut dedup = FuzzyDeduplicator::new(0.7);
-
-let reader = open_dataset("dataset.jsonl")?;
-for (id, result) in reader.enumerate() {
-    let record = result?;
-
-    // Find similar documents already indexed
-    let duplicates = dedup.find_duplicates(&record.data);
-
-    if duplicates.is_empty() {
-        // No similar documents found - this is unique
-        dedup.add_record(id, &record.data);
-        println!("Unique: {}", record.data);
-    } else {
-        // Found similar documents
-        println!("Duplicate of: {:?}", duplicates);
-    }
-}
-
-let stats = dedup.stats();
-println!("Processed: {}, Duplicates: {}, Rate: {:.2}%",
-    stats.total_processed,
-    stats.records_with_duplicates,
-    stats.duplicate_rate());
-```
-
-### Text Normalization
-
-Improve fuzzy matching with text preprocessing:
+### Text normalization
 
 ```rust
 use dataset_dedup_filters::text_preprocessing::TextNormalizer;
-use dataset_dedup_core::fuzzy_dedup::FuzzyDeduplicator;
 
-// Create normalizer with preset
-let normalizer = TextNormalizer::aggressive(); // or balanced(), conservative()
-
-// Use with custom fuzzy deduplicator
-let dedup = FuzzyDeduplicator::with_normalizer(0.7, normalizer);
-
-// Or normalize text manually
-let text = "  Hello, WORLD!!! 😊  ";
-let normalized = normalizer.normalize(text);
-// Result: "hello world"
+let norm = TextNormalizer::aggressive();
+assert_eq!(norm.normalize("  Hello, WORLD!!!  "), "hello world");
 ```
-
-### Finding Duplicate Clusters
-
-Process a batch and find all duplicate clusters:
-
-```rust
-use dataset_dedup_core::fuzzy_dedup::FuzzyDeduplicator;
-
-let mut dedup = FuzzyDeduplicator::new(0.8);
-let records = vec![
-    json!({"text": "The quick brown fox"}),
-    json!({"text": "The quick brown fox"}),  // Duplicate of 0
-    json!({"text": "Hello world"}),
-    json!({"text": "Hello world"}),          // Duplicate of 2
-];
-
-let clusters = dedup.find_all_duplicates(&records);
-// Returns: [[0, 1], [2, 3]]
-```
-
-## Performance Characteristics
-
-- **Memory Usage**: Constant O(1) per record, O(n) for deduplication hash table
-- **Throughput**:
-  - JSONL: ~500 MB/s on modern hardware
-  - Parquet: ~1 GB/s with column projection
-- **Scalability**: Tested with datasets up to 100GB+
-
-## Dependencies
-
-Key dependencies:
-- `tokio` - Async runtime
-- `arrow` / `parquet` - Parquet file support
-- `serde` / `serde_json` - JSON serialization
-- `flate2` - Gzip compression
-- `clap` - CLI argument parsing
-- `seahash` - Fast hashing algorithm
-- `ahash` - High-performance hashing for dedup
-- `rayon` - Parallel processing
-- `tracing` - Logging infrastructure
-- `bloomfilter` - Probabilistic data structures
-- `sled` - Embedded database for hash storage
-- `regex` - Text pattern matching
-- `unicode-normalization` - Unicode text normalization
-
-## Testing
-
-Run all tests:
-
-```bash
-cargo test
-```
-
-Run tests for a specific crate:
-
-```bash
-cargo test -p dataset-dedup-formats
-```
-
-Run tests with logging:
-
-```bash
-RUST_LOG=debug cargo test
-```
-
-### Phase 3: Exact Deduplication ✅
-
-#### Phase 3A: Hash-Based Dedup Engine ✅
-
-- [x] ExactDeduplicator with multiple hash strategies
-- [x] Full content hashing
-- [x] Field-specific hashing
-- [x] Normalized hashing (lowercase, trim)
-- [x] Multi-field hashing
-- [x] Bloom filter optimization for fast negative lookups
-- [x] Comprehensive statistics tracking
-- [x] Memory usage estimation
-- [x] High-performance with ahash
-- [x] Comprehensive unit tests
-
-#### Phase 3B: Memory-Efficient Hash Storage ✅
-
-- [x] Two-tier storage architecture
-- [x] Hot cache (in-memory HashSet) for recent hashes
-- [x] Cold storage (disk-backed sled database) for older hashes
-- [x] LRU-like eviction from hot to cold
-- [x] Automatic promotion of frequently accessed hashes
-- [x] Configurable memory limits
-- [x] Graceful degradation
-- [x] Performance: 100K+ hashes/sec lookup
-- [x] Persistence across sessions
-- [x] Comprehensive tests including large-scale scenarios
-
-### Phase 4: Fuzzy Deduplication ✅
-
-#### Phase 4A: MinHash Implementation ✅
-
-- [x] MinHash algorithm with k-shingles (k=3)
-- [x] 128 hash functions for high-dimensional signatures
-- [x] Jaccard similarity estimation
-- [x] LSH (Locality Sensitive Hashing) for fast candidate generation
-- [x] Configurable bands and rows (32 bands × 4 rows = 128 hashes)
-- [x] Optimized for >0.7 similarity detection
-- [x] Comprehensive tests with known duplicate pairs
-- [x] Similarity score verification
-
-#### Phase 4B: Text Preprocessing for Fuzzy Matching ✅
-
-- [x] TextNormalizer with multiple configuration options:
-  - Lowercase conversion
-  - Punctuation removal
-  - Whitespace normalization
-  - Unicode NFKD normalization
-- [x] Three presets:
-  - **Aggressive**: All normalizations (max recall)
-  - **Conservative**: Minimal normalization (max precision)
-  - **Balanced**: Default preset (good balance)
-- [x] Efficient memory reuse with buffer allocation
-- [x] Performance: 100K+ docs/sec normalization
-- [x] Edge case handling: emojis, special chars, different scripts
-- [x] Comprehensive tests for all text transformations
-
-#### Phase 4C: Fuzzy Dedup Integration ✅
-
-- [x] FuzzyDeduplicator combining MinHash + LSH + normalization
-- [x] Configurable similarity threshold
-- [x] Automatic text extraction and normalization
-- [x] Candidate generation via LSH
-- [x] Similarity verification with Jaccard distance
-- [x] Batch processing support
-- [x] Duplicate cluster detection
-- [x] Performance: 10K+ records/sec fuzzy dedup
-- [x] Comprehensive statistics tracking
-- [x] Integration tests with real duplicates
 
 ## Benchmarks
 
-Run benchmarks to measure deduplication performance:
+Run benchmarks against Python baselines (pandas, polars, datasketch):
 
 ```bash
-# Core deduplication benchmarks
-cargo bench --package dataset-dedup-core
+# Exact dedup
+./benchmarks/run_comparison.sh
 
-# Text preprocessing benchmarks
+# Fuzzy dedup
+./benchmarks/run_fuzzy_comparison.sh
+
+# Rust micro-benchmarks
+cargo bench --package dataset-dedup-core
 cargo bench --package dataset-dedup-filters
 ```
 
-Example results (on modern hardware):
+See `benchmarks/README.md` for full setup instructions and expected results.
 
-**Exact Deduplication:**
-- 10K unique records: ~500K records/sec
-- 10K with 50% duplicates: ~750K records/sec
-- 100K records: ~400K records/sec
+**Representative throughput (single machine):**
 
-**Tiered Storage:**
-- Insert (10K): ~300K inserts/sec
-- Lookup (10K): ~2M lookups/sec
+| Operation | Throughput |
+|-----------|-----------|
+| Exact dedup | ~500K records/sec |
+| Fuzzy dedup (MinHash + LSH) | ~10K records/sec |
+| Text normalization | ~100--200K docs/sec |
+| JSONL reading | ~500 MB/s |
+| Parquet reading (column projection) | ~1 GB/s |
 
-**Fuzzy Deduplication:**
-- MinHash signature generation (1K docs): ~50K docs/sec
-- LSH index insertion (1K): ~200K inserts/sec
-- LSH query (100): ~10K queries/sec
-- End-to-end fuzzy dedup (1K records): ~10K records/sec
+## Project structure
 
-**Text Preprocessing:**
-- Aggressive normalization: ~100K+ docs/sec
-- Balanced normalization: ~150K+ docs/sec
-- Conservative normalization: ~200K+ docs/sec
+```
+dataset-dedup/
+├── Cargo.toml                    # Workspace root
+├── crates/
+│   ├── core/                     # Deduplication engine
+│   │   └── src/
+│   │       ├── minhash.rs        # MinHash signatures + LSH index
+│   │       ├── fuzzy_dedup.rs    # Fuzzy dedup pipeline
+│   │       ├── exact_dedup.rs    # Exact dedup with Bloom filter
+│   │       ├── hash_storage.rs   # Tiered hot/cold hash storage
+│   │       ├── pipeline.rs       # Parallel processing pipeline
+│   │       ├── memory.rs         # Memory tracking + limits
+│   │       ├── hash.rs           # Hashing utilities
+│   │       ├── dedup.rs          # Basic dedup tracker
+│   │       └── error.rs          # Error types
+│   ├── formats/                  # File format readers
+│   │   └── src/
+│   │       ├── jsonl.rs          # JSONL streaming reader (+ gzip)
+│   │       ├── parquet_reader.rs # Parquet batch reader
+│   │       ├── reader.rs         # Unified DatasetReader trait
+│   │       └── record.rs         # Record data structure
+│   ├── filters/                  # Text processing + quality
+│   │   └── src/
+│   │       ├── text_preprocessing.rs  # Text normalization
+│   │       ├── quality.rs        # Quality scoring
+│   │       ├── language.rs       # Language detection
+│   │       └── length_filter.rs  # Length constraints
+│   └── cli/                      # Command-line interface + TUI
+├── examples/                     # Example config files
+└── benchmarks/                   # Python baselines + comparison scripts
+```
 
-## Future Phases
+## Testing
 
-### Phase 5: Quality Filters
-- Length-based filtering
-- Language detection
-- Content quality scoring
-- PII detection and removal
+```bash
+# Full test suite
+cargo test --workspace
 
-### Phase 5: Output Writers
-- Streaming output writers
-- Format conversion
-- Sharding support
+# Single crate
+cargo test -p dataset-dedup-core
 
-### Phase 6: Distributed Processing
-- Multi-threaded processing
-- Distributed hash table
-- Cloud storage integration
+# With debug logging
+RUST_LOG=debug cargo test
+```
 
 ## License
 
 MIT
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit pull requests or open issues for bugs and feature requests.
