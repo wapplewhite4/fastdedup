@@ -1,4 +1,4 @@
-# dataset-dedup
+# data-dedup
 
 High-performance Rust tool for deduplicating and cleaning AI training datasets.
 Handles exact and fuzzy (near-duplicate) detection on datasets with millions of
@@ -23,10 +23,18 @@ Requires Rust 1.70+.
 
 ```bash
 git clone <repository-url>
-cd dataset-dedup
+cd data-dedup
+
+# Option A: install the binary into ~/.cargo/bin (then it's on your PATH)
+cargo install --path crates/cli
+
+# Option B: build only, then run from the repo
 cargo build --release
-# binary: target/release/dataset-dedup
+./target/release/dataset-dedup --help
 ```
+
+The binary is named `dataset-dedup`. After `cargo install` you can call it
+directly; with Option B prefix every command with `./target/release/`.
 
 ## Quick start
 
@@ -514,7 +522,7 @@ See `benchmarks/README.md` for full setup instructions and expected results.
 ## Project structure
 
 ```
-dataset-dedup/
+data-dedup/
 ├── Cargo.toml                    # Workspace root
 ├── crates/
 │   ├── core/                     # Deduplication engine
