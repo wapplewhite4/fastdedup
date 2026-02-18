@@ -4,6 +4,7 @@
 
 mod config;
 mod progress;
+mod tui;
 
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
@@ -177,6 +178,9 @@ enum Commands {
         #[arg(value_enum)]
         shell: Shell,
     },
+
+    /// Launch the interactive terminal UI
+    Tui,
 }
 
 #[tokio::main]
@@ -242,6 +246,9 @@ async fn main() -> Result<()> {
         }
         Commands::Completions { shell } => {
             generate_completions(shell);
+        }
+        Commands::Tui => {
+            tui::run_tui()?;
         }
     }
 
