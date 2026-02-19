@@ -4,6 +4,7 @@
 //! documents using MinHash signatures and LSH indexing.
 
 use crate::minhash::{LSHIndex, MinHasher, MinHashSignature};
+use crate::signature_store::SignatureStoreConfig;
 use dataset_dedup_filters::text_preprocessing::TextNormalizer;
 use serde_json::Value;
 use tracing::{debug, info, warn};
@@ -64,6 +65,13 @@ pub struct FuzzyDedupConfig {
     pub rows_per_band: usize,
     /// Text field to use for deduplication
     pub text_field: String,
+    /// Maximum number of MinHash signatures to keep in the in-memory hot
+    /// cache.  Older signatures are spilled to an on-disk sled database.
+    /// Default: 2,000,000 (~2 GB for 128-hash signatures).
+    pub max_hot_signatures: usize,
+    /// Directory for on-disk signature storage.  `None` → temporary
+    /// directory that is cleaned up automatically.
+    pub signature_store_path: Option<String>,
 }
 
 impl Default for FuzzyDedupConfig {
@@ -79,6 +87,8 @@ impl Default for FuzzyDedupConfig {
             num_bands: 16,
             rows_per_band: 8,
             text_field: "text".to_string(),
+            max_hot_signatures: 2_000_000,
+            signature_store_path: None,
         }
     }
 }
@@ -110,12 +120,17 @@ impl FuzzyDeduplicator {
     /// Create a new fuzzy deduplicator with custom configuration
     pub fn with_config(config: FuzzyDedupConfig) -> Self {
         info!(
-            "Creating FuzzyDeduplicator with threshold {}, {} hash functions",
-            config.similarity_threshold, config.num_hashes
+            "Creating FuzzyDeduplicator with threshold {}, {} hash functions, max_hot_signatures={}",
+            config.similarity_threshold, config.num_hashes, config.max_hot_signatures,
         );
 
+        let store_config = SignatureStoreConfig {
+            max_hot: config.max_hot_signatures,
+            db_path: config.signature_store_path.as_ref().map(Into::into),
+        };
+
         let minhash = MinHasher::new_with_mode(config.num_hashes, config.shingle_size, config.word_shingles);
-        let lsh_index = LSHIndex::new(config.num_bands, config.rows_per_band);
+        let lsh_index = LSHIndex::with_store_config(config.num_bands, config.rows_per_band, store_config);
         let normalizer = TextNormalizer::balanced();
 
         Self {
@@ -193,12 +208,18 @@ impl FuzzyDeduplicator {
         for &candidate_id in &candidates {
             self.stats.lsh_candidates_checked += 1;
 
-            if let Some(candidate_sig) = self.lsh_index.get_signature(candidate_id) {
-                let similarity = signature.jaccard_similarity(candidate_sig);
+            match self.lsh_index.get_signature(candidate_id) {
+                Ok(Some(candidate_sig)) => {
+                    let similarity = signature.jaccard_similarity(&candidate_sig);
 
-                if similarity >= self.config.similarity_threshold {
-                    duplicates.push(candidate_id);
-                    self.stats.verified_duplicates += 1;
+                    if similarity >= self.config.similarity_threshold {
+                        duplicates.push(candidate_id);
+                        self.stats.verified_duplicates += 1;
+                    }
+                }
+                Ok(None) => { /* stale ID, skip */ }
+                Err(e) => {
+                    warn!("Failed to read signature for candidate {}: {}", candidate_id, e);
                 }
             }
         }
@@ -256,12 +277,18 @@ impl FuzzyDeduplicator {
         for &candidate_id in &candidates {
             self.stats.lsh_candidates_checked += 1;
 
-            if let Some(candidate_sig) = self.lsh_index.get_signature(candidate_id) {
-                let similarity = signature.jaccard_similarity(candidate_sig);
+            match self.lsh_index.get_signature(candidate_id) {
+                Ok(Some(candidate_sig)) => {
+                    let similarity = signature.jaccard_similarity(&candidate_sig);
 
-                if similarity >= self.config.similarity_threshold {
-                    duplicates.push(candidate_id);
-                    self.stats.verified_duplicates += 1;
+                    if similarity >= self.config.similarity_threshold {
+                        duplicates.push(candidate_id);
+                        self.stats.verified_duplicates += 1;
+                    }
+                }
+                Ok(None) => { /* stale ID, skip */ }
+                Err(e) => {
+                    warn!("Failed to read signature for candidate {}: {}", candidate_id, e);
                 }
             }
         }
@@ -337,11 +364,17 @@ impl FuzzyDeduplicator {
         let mut duplicates: Vec<(usize, f64)> = Vec::new();
         for &candidate_id in &candidates {
             self.stats.lsh_candidates_checked += 1;
-            if let Some(candidate_sig) = self.lsh_index.get_signature(candidate_id) {
-                let similarity = signature.jaccard_similarity(candidate_sig);
-                if similarity >= self.config.similarity_threshold {
-                    duplicates.push((candidate_id, similarity));
-                    self.stats.verified_duplicates += 1;
+            match self.lsh_index.get_signature(candidate_id) {
+                Ok(Some(candidate_sig)) => {
+                    let similarity = signature.jaccard_similarity(&candidate_sig);
+                    if similarity >= self.config.similarity_threshold {
+                        duplicates.push((candidate_id, similarity));
+                        self.stats.verified_duplicates += 1;
+                    }
+                }
+                Ok(None) => { /* stale ID, skip */ }
+                Err(e) => {
+                    warn!("Failed to read signature for candidate {}: {}", candidate_id, e);
                 }
             }
         }
@@ -434,6 +467,7 @@ mod tests {
             num_bands: 16,
             rows_per_band: 8,
             text_field: "text".to_string(),
+            ..Default::default()
         };
         let mut dedup = FuzzyDeduplicator::with_config(config);
 

@@ -3,6 +3,7 @@
 //! High-performance tool for deduplicating and cleaning AI training datasets
 
 mod config;
+mod disk_kv;
 mod progress;
 mod tui;
 
@@ -10,7 +11,6 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
 use rayon::prelude::*;
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -417,6 +417,7 @@ async fn fuzzy_dedup(
         word_shingles,
         num_bands,
         rows_per_band,
+        ..Default::default()
     };
     let mut deduplicator = FuzzyDeduplicator::with_config(config);
 
@@ -426,7 +427,8 @@ async fn fuzzy_dedup(
 
     // Maps row_id → extracted field text for every kept record so we can
     // populate `matched_value` in the removed log without re-reading the file.
-    let mut field_values: HashMap<usize, String> = HashMap::new();
+    // Uses disk-backed storage to bound memory at scale.
+    let mut field_values = disk_kv::DiskBackedStringMap::new(2_000_000)?;
 
     // Open output writers unless this is a dry-run or stats-only pass.
     //
@@ -503,7 +505,7 @@ async fn fuzzy_dedup(
                 None => {
                     unique += 1;
                     if write_output {
-                        field_values.insert(row_id, field_text);
+                        field_values.insert(row_id, field_text)?;
                     }
                     if let Some(ref mut w) = clean_writer {
                         writeln!(w, "{}", serde_json::to_string(&record.data)?)?;
@@ -514,8 +516,9 @@ async fn fuzzy_dedup(
                     if let Some(ref mut w) = removed_writer {
                         // One log line per duplicate relationship.
                         for &(dup_id, sim) in dup_matches {
-                            let matched_value =
-                                field_values.get(&dup_id).map(|s| s.as_str()).unwrap_or("");
+                            let matched_value = field_values
+                                .get(&dup_id)?
+                                .unwrap_or_default();
                             let entry = serde_json::json!({
                                 "row_id": row_id,
                                 "duplicate_of_row_id": dup_id,
