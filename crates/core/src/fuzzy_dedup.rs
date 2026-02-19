@@ -67,7 +67,7 @@ pub struct FuzzyDedupConfig {
     pub text_field: String,
     /// Maximum number of MinHash signatures to keep in the in-memory hot
     /// cache.  Older signatures are spilled to an on-disk sled database.
-    /// Default: 2,000,000 (~2 GB for 128-hash signatures).
+    /// Default: 2,000,000 (~1 GB for 128-hash u32 signatures).
     pub max_hot_signatures: usize,
     /// Directory for on-disk signature storage.  `None` → temporary
     /// directory that is cleaned up automatically.

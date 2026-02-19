@@ -23,7 +23,11 @@ impl DiskBackedStringMap {
     /// Create a new store with the given in-memory capacity.
     pub fn new(max_hot: usize) -> Result<Self> {
         let dir = Self::make_temp_path();
-        let cold = sled::open(&dir)?;
+        // Limit sled page cache to 64 MB (default 1 GB is wasteful here)
+        let cold = sled::Config::new()
+            .path(&dir)
+            .cache_capacity(64 * 1024 * 1024)
+            .open()?;
         Ok(Self {
             hot: HashMap::with_capacity(max_hot.min(500_000)),
             cold,
