@@ -14,7 +14,7 @@ use rayon::prelude::*;
 
 use dataset_dedup_core::exact_dedup::{ExactDeduplicator, HashStrategy};
 use dataset_dedup_core::fuzzy_dedup::{FuzzyDeduplicator, FuzzyDedupConfig};
-use dataset_dedup_formats::open_dataset;
+use dataset_dedup_formats::{open_dataset, ParquetWriter};
 
 use super::{ProgressMsg, RunResults};
 
@@ -92,7 +92,22 @@ fn run_fuzzy_inner(
     };
     let mut deduplicator = FuzzyDeduplicator::with_config(config);
 
-    let mut clean_writer = BufWriter::new(File::create(&output)?);
+    let output_is_parquet = output
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e == "parquet")
+        .unwrap_or(false);
+
+    let mut clean_writer: Option<BufWriter<File>> = if output_is_parquet {
+        None
+    } else {
+        Some(BufWriter::new(File::create(&output)?))
+    };
+    let mut clean_parquet_writer: Option<ParquetWriter> = if output_is_parquet {
+        Some(ParquetWriter::open(&output)?)
+    } else {
+        None
+    };
     let mut removed_writer = BufWriter::new(File::create(&removed_output)?);
 
     // Maps row_id → field text for kept records to populate `matched_value`.
@@ -137,7 +152,11 @@ fn run_fuzzy_inner(
                 None => {
                     unique += 1;
                     field_values.insert(row_id, field_text)?;
-                    writeln!(clean_writer, "{}", serde_json::to_string(&record.data)?)?;
+                    if let Some(ref mut w) = clean_writer {
+                        writeln!(w, "{}", serde_json::to_string(&record.data)?)?;
+                    } else if let Some(ref mut w) = clean_parquet_writer {
+                        w.write_record(&record)?;
+                    }
                 }
                 Some(ref dup_matches) => {
                     duplicates += 1;
@@ -169,7 +188,12 @@ fn run_fuzzy_inner(
         }
     }
 
-    clean_writer.flush()?;
+    if let Some(ref mut w) = clean_writer {
+        w.flush()?;
+    }
+    if let Some(w) = clean_parquet_writer {
+        w.close()?;
+    }
     removed_writer.flush()?;
 
     let stats = deduplicator.stats();
@@ -221,7 +245,23 @@ fn run_exact_inner(
         HashStrategy::Field(field)
     };
     let mut deduplicator = ExactDeduplicator::new(strategy);
-    let mut writer = BufWriter::new(File::create(&output)?);
+
+    let output_is_parquet = output
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e == "parquet")
+        .unwrap_or(false);
+
+    let mut writer: Option<BufWriter<File>> = if output_is_parquet {
+        None
+    } else {
+        Some(BufWriter::new(File::create(&output)?))
+    };
+    let mut parquet_writer: Option<ParquetWriter> = if output_is_parquet {
+        Some(ParquetWriter::open(&output)?)
+    } else {
+        None
+    };
 
     let mut total: u64 = 0;
     let mut unique: u64 = 0;
@@ -233,7 +273,11 @@ fn run_exact_inner(
 
         if !deduplicator.is_duplicate(&record.data) {
             unique += 1;
-            writeln!(writer, "{}", serde_json::to_string(&record.data)?)?;
+            if let Some(ref mut w) = writer {
+                writeln!(w, "{}", serde_json::to_string(&record.data)?)?;
+            } else if let Some(ref mut w) = parquet_writer {
+                w.write_record(&record)?;
+            }
         } else {
             duplicates += 1;
         }
@@ -247,7 +291,12 @@ fn run_exact_inner(
         }
     }
 
-    writer.flush()?;
+    if let Some(ref mut w) = writer {
+        w.flush()?;
+    }
+    if let Some(w) = parquet_writer {
+        w.close()?;
+    }
 
     Ok(RunResults {
         total,

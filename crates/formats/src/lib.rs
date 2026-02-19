@@ -6,10 +6,12 @@
 pub mod error;
 pub mod jsonl;
 pub mod parquet_reader;
+pub mod parquet_writer;
 pub mod reader;
 pub mod record;
 
 pub use error::{Error, Result};
+pub use parquet_writer::ParquetWriter;
 pub use reader::{open_dataset, DatasetReader};
 pub use record::Record;
 

@@ -11,6 +11,7 @@ mod tui;
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
+use dataset_dedup_formats::ParquetWriter;
 use rayon::prelude::*;
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -433,18 +434,30 @@ async fn fuzzy_dedup(
 
     // Open output writers unless this is a dry-run or stats-only pass.
     //
-    // clean_writer   → the path the user specified (JSONL, one record per line)
-    // removed_writer → auto-derived <stem>.removed.jsonl; one JSON object per
-    //                  duplicate relationship with row ids, field values, and
-    //                  similarity score for easy downstream inspection.
+    // clean_writer         → JSONL BufWriter (used when output extension is not .parquet)
+    // clean_parquet_writer → ParquetWriter   (used when output extension is .parquet)
+    // removed_writer       → auto-derived <stem>.removed.jsonl; one JSON object per
+    //                        duplicate relationship with row ids, field values, and
+    //                        similarity score for easy downstream inspection.
     let write_output = !dry_run && !stats_only;
     let removed_output = removed_path(&output);
 
+    let output_is_parquet = output
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e == "parquet")
+        .unwrap_or(false);
+
     let mut clean_writer: Option<BufWriter<File>> = None;
+    let mut clean_parquet_writer: Option<ParquetWriter> = None;
     let mut removed_writer: Option<BufWriter<File>> = None;
 
     if write_output {
-        clean_writer = Some(BufWriter::new(File::create(&output)?));
+        if output_is_parquet {
+            clean_parquet_writer = Some(ParquetWriter::open(&output)?);
+        } else {
+            clean_writer = Some(BufWriter::new(File::create(&output)?));
+        }
         removed_writer = Some(BufWriter::new(File::create(&removed_output)?));
         info!("  Clean output:   {:?}", output);
         info!("  Removed output: {:?}", removed_output);
@@ -510,6 +523,8 @@ async fn fuzzy_dedup(
                     }
                     if let Some(ref mut w) = clean_writer {
                         writeln!(w, "{}", serde_json::to_string(&record.data)?)?;
+                    } else if let Some(ref mut w) = clean_parquet_writer {
+                        w.write_record(&record)?;
                     }
                 }
                 Some(ref dup_matches) => {
@@ -539,10 +554,14 @@ async fn fuzzy_dedup(
         progress.update(reader.bytes_processed(), total, duplicates, 0);
     }
 
-    // Flush writers explicitly before printing the summary so any buffered data
-    // is on disk by the time the user sees the "done" message.
+    // Flush / close writers before printing the summary so all data is on disk.
     if let Some(ref mut w) = clean_writer {
         w.flush()?;
+    }
+    // close() flushes remaining buffered records and writes the parquet footer —
+    // without this the file is corrupt.
+    if let Some(w) = clean_parquet_writer {
+        w.close()?;
     }
     if let Some(ref mut w) = removed_writer {
         w.flush()?;
