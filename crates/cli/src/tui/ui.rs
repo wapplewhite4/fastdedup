@@ -288,7 +288,7 @@ fn render_running(f: &mut Frame, app: &App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // gauge
-            Constraint::Length(7), // stats
+            Constraint::Length(9), // stats (6 lines + padding)
             Constraint::Min(0),
             Constraint::Length(1), // help
         ])
@@ -351,6 +351,32 @@ fn render_running(f: &mut Frame, app: &App) {
             0.0
         };
 
+        let mem_color = if p.memory_mb == 0 {
+            DIM
+        } else if p.memory_mb > 8_000 {
+            ERR
+        } else if p.memory_mb > 4_000 {
+            Color::Yellow
+        } else {
+            OK
+        };
+
+        let cpu_color = if p.cpu_pct > 400.0 {
+            ERR
+        } else if p.cpu_pct > 200.0 {
+            Color::Yellow
+        } else {
+            OK
+        };
+
+        let mem_label = if p.memory_mb == 0 {
+            "—".to_string()
+        } else if p.memory_mb >= 1024 {
+            format!("{:.1} GB", p.memory_mb as f64 / 1024.0)
+        } else {
+            format!("{} MB", p.memory_mb)
+        };
+
         let stats_text = vec![
             Line::from(vec![
                 Span::styled("  Duplicates removed  ", Style::default().fg(DIM)),
@@ -370,6 +396,18 @@ fn render_running(f: &mut Frame, app: &App) {
             Line::from(vec![
                 Span::styled("  ETA                 ", Style::default().fg(DIM)),
                 Span::raw(eta),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  Memory (RSS)        ", Style::default().fg(DIM)),
+                Span::styled(mem_label, Style::default().fg(mem_color)),
+            ]),
+            Line::from(vec![
+                Span::styled("  CPU usage           ", Style::default().fg(DIM)),
+                Span::styled(
+                    format!("{:.1}%", p.cpu_pct),
+                    Style::default().fg(cpu_color),
+                ),
             ]),
         ];
 
