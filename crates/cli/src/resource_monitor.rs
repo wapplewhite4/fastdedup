@@ -60,16 +60,7 @@ pub fn spawn_into_bar(bar: ProgressBar, interval: Duration) {
             }
 
             let (memory_mb, cpu_pct) = sample(&mut prev_cpu, &mut prev_time);
-
-            let mem_str = if memory_mb == 0 {
-                "—".to_string()
-            } else if memory_mb >= 1024 {
-                format!("{:.1} GB", memory_mb as f64 / 1024.0)
-            } else {
-                format!("{} MB", memory_mb)
-            };
-
-            bar.set_message(format!("{mem_str} RAM | {cpu_pct:.1}% CPU"));
+            bar.set_message(format_resources(memory_mb, cpu_pct));
         }
     });
 }
@@ -100,24 +91,68 @@ fn sample(prev_cpu: &mut u64, prev_time: &mut Instant) -> (u64, f64) {
     (memory_mb, cpu_pct)
 }
 
+/// Format memory (MB) and cpu_pct into a display string.
+/// Exported so the TUI ui.rs can use the same formatting logic.
+pub fn format_resources(memory_mb: u64, cpu_pct: f64) -> String {
+    let mem_str = if memory_mb == 0 {
+        "—".to_string()
+    } else if memory_mb >= 1024 {
+        format!("{:.1} GB", memory_mb as f64 / 1024.0)
+    } else {
+        format!("{} MB", memory_mb)
+    };
+    format!("{mem_str} RAM | {cpu_pct:.1}% CPU")
+}
+
 // ── /proc helpers ────────────────────────────────────────────────────────────
 
 /// Read the process's RSS from `/proc/self/status` in megabytes.
+///
+/// Uses two sources in order of preference:
+///   1. VmRSS from `/proc/self/status`   (accurate, standard)
+///   2. resident pages from `/proc/self/statm`  (simpler, reliable fallback)
 fn read_rss_mb() -> Option<u64> {
+    // Primary: /proc/self/status VmRSS (in kB)
+    if let Some(kb) = read_vmrss_kb() {
+        if kb > 0 {
+            return Some(kb / 1024);
+        }
+    }
+    // Fallback: /proc/self/statm resident pages × 4 kB per page
+    read_statm_rss_mb()
+}
+
+/// Parse VmRSS from `/proc/self/status`.  Returns kibibytes.
+fn read_vmrss_kb() -> Option<u64> {
     let text = fs::read_to_string("/proc/self/status").ok()?;
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("VmRSS:") {
-            // format: "VmRSS:   123456 kB"
-            let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
-            return Some(kb / 1024);
+            // format: "VmRSS:\t123456 kB"
+            return rest.split_whitespace().next()?.parse().ok();
         }
     }
     None
 }
 
+/// Parse RSS from `/proc/self/statm` (resident pages × 4 kB).  Returns MB.
+fn read_statm_rss_mb() -> Option<u64> {
+    let text = fs::read_to_string("/proc/self/statm").ok()?;
+    // format: "size resident shared text lib data dt"  (all in pages)
+    let resident_pages: u64 = text.split_whitespace().nth(1)?.parse().ok()?;
+    // page size = 4096 bytes = 4 kB; convert pages → MB
+    Some(resident_pages * 4 / 1024)
+}
+
 /// Read the sum of utime + stime from `/proc/self/stat` in jiffies (1/100 s).
+///
+/// Uses the explicit `/proc/{pid}/stat` path (via `std::process::id()`) so
+/// the result is always the whole process's accumulated CPU time regardless
+/// of which thread calls this function.
 fn read_cpu_jiffies() -> u64 {
-    let Ok(text) = fs::read_to_string("/proc/self/stat") else {
+    // Use explicit PID path to avoid any /proc/self threading ambiguity.
+    let pid = std::process::id();
+    let path = format!("/proc/{pid}/stat");
+    let Ok(text) = fs::read_to_string(&path) else {
         return 0;
     };
     // Fields are space-separated.  The second field is the command name
@@ -133,7 +168,7 @@ fn read_cpu_jiffies() -> u64 {
     // utime(12) stime(13) ...
     let fields: Vec<&str> = after_paren.split_whitespace().collect();
     // 0-indexed in `fields` (first field after ')' is state → index 0)
-    // utime is field 12 → index 11, stime is field 13 → index 12
+    // utime is field 14 → index 11, stime is field 15 → index 12
     let utime: u64 = fields.get(11).and_then(|s| s.parse().ok()).unwrap_or(0);
     let stime: u64 = fields.get(12).and_then(|s| s.parse().ok()).unwrap_or(0);
     utime + stime
