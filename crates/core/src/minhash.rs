@@ -53,15 +53,18 @@ type AHashMap<K, V> = std::collections::HashMap<K, V, RandomState>;
 const MAX_CANDIDATES_PER_QUERY: usize = 200;
 
 /// MinHash signature for a document
+///
+/// Stores hash values as `u32` since the MinHash prime (2^31 - 1) fits
+/// in 32 bits, halving per-signature memory (512 B vs 1 KiB at 128 hashes).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MinHashSignature {
-    /// MinHash signature values
-    pub signature: Vec<u64>,
+    /// MinHash signature values (each < 2^31)
+    pub signature: Vec<u32>,
 }
 
 impl MinHashSignature {
     /// Create a new MinHash signature
-    pub fn new(signature: Vec<u64>) -> Self {
+    pub fn new(signature: Vec<u32>) -> Self {
         Self { signature }
     }
 
@@ -173,7 +176,7 @@ impl MinHasher {
     /// language text, and avoids O(n²) LSH false positives from common char n-grams).
     pub fn compute_signature(&self, text: &str) -> MinHashSignature {
         if text.is_empty() {
-            return MinHashSignature::new(vec![0; self.num_hashes]);
+            return MinHashSignature::new(vec![0u32; self.num_hashes]);
         }
 
         if self.word_shingles {
@@ -196,7 +199,7 @@ impl MinHasher {
         let words: Vec<&str> = text.split_whitespace().collect();
 
         if words.is_empty() {
-            return MinHashSignature::new(vec![0; self.num_hashes]);
+            return MinHashSignature::new(vec![0u32; self.num_hashes]);
         }
 
         if words.len() < self.shingle_size {
@@ -264,12 +267,13 @@ impl MinHasher {
 
     /// Compute MinHash signature from a set of shingle hashes
     fn compute_signature_from_hashes(&self, shingle_hashes: &HashSet<u64>) -> MinHashSignature {
-        let mut signature = vec![u64::MAX; self.num_hashes];
+        // Prime is 2^31-1, so all hash values fit in u32
+        let mut signature = vec![u32::MAX; self.num_hashes];
 
         for &shingle_hash in shingle_hashes {
             for i in 0..self.num_hashes {
                 let (a, b) = self.coefficients[i];
-                let hash_value = (a.wrapping_mul(shingle_hash).wrapping_add(b)) % self.prime;
+                let hash_value = ((a.wrapping_mul(shingle_hash).wrapping_add(b)) % self.prime) as u32;
 
                 if hash_value < signature[i] {
                     signature[i] = hash_value;
@@ -287,10 +291,10 @@ impl MinHasher {
 
     /// Helper for computing signature from a single hash
     fn compute_from_single_hash(&self, shingle_hash: u64) -> MinHashSignature {
-        let mut signature = vec![u64::MAX; self.num_hashes];
+        let mut signature = vec![u32::MAX; self.num_hashes];
         for i in 0..self.num_hashes {
             let (a, b) = self.coefficients[i];
-            signature[i] = (a.wrapping_mul(shingle_hash).wrapping_add(b)) % self.prime;
+            signature[i] = ((a.wrapping_mul(shingle_hash).wrapping_add(b)) % self.prime) as u32;
         }
         MinHashSignature::new(signature)
     }
@@ -303,11 +307,11 @@ impl MinHasher {
     }
 }
 
-/// Hash a band slice (rows_per_band u64 values) down to a single u64 key.
+/// Hash a band slice (rows_per_band u32 values) down to a single u64 key.
 ///
 /// Uses ahash for speed; collision probability is ~1/2^64 per pair per band,
 /// which is negligible.
-fn hash_band_key(slice: &[u64], hash_builder: &RandomState) -> u64 {
+fn hash_band_key(slice: &[u32], hash_builder: &RandomState) -> u64 {
     let mut hasher = hash_builder.build_hasher();
     slice.hash(&mut hasher);
     hasher.finish()
@@ -328,8 +332,9 @@ pub struct LSHIndex {
     /// Number of rows per band
     rows_per_band: usize,
     /// Hash tables for each band, keyed by a pre-hashed u64 of the band
-    /// signature slice (avoids Vec<u64> allocation and SipHash overhead)
-    bands: Vec<AHashMap<u64, Vec<usize>>>,
+    /// signature slice.  Document IDs are stored as u32 to halve band-table
+    /// memory (supports up to ~4 billion documents).
+    bands: Vec<AHashMap<u64, Vec<u32>>>,
     /// Tiered signature storage: hot in-memory cache + cold disk-backed sled.
     /// Bounds memory usage regardless of dataset size.
     signatures: TieredSignatureStore,
@@ -446,6 +451,7 @@ impl LSHIndex {
         }
 
         // Insert into each band's hash table using pre-hashed u64 keys
+        let id32 = id as u32;
         for band_idx in 0..self.num_bands {
             let start = band_idx * self.rows_per_band;
             let end = start + self.rows_per_band;
@@ -454,7 +460,7 @@ impl LSHIndex {
             self.bands[band_idx]
                 .entry(band_key)
                 .or_insert_with(Vec::new)
-                .push(id);
+                .push(id32);
         }
 
         // Store signature in tiered storage (hot cache + cold disk)
@@ -502,7 +508,8 @@ impl LSHIndex {
             let band_key = hash_band_key(&signature.signature[start..end], &self.band_hash_builder);
 
             if let Some(ids) = self.bands[band_idx].get(&band_key) {
-                for &id in ids {
+                for &id32 in ids {
+                    let id = id32 as usize;
                     // Only include IDs that still have a valid signature
                     // (filters out stale entries from removed duplicates)
                     if self.signatures.contains(id).unwrap_or(false) {
@@ -560,7 +567,7 @@ impl LSHIndex {
         let sigs = &self.signatures;
         for band in &mut self.bands {
             band.retain(|_key, ids| {
-                ids.retain(|&id| sigs.contains(id).unwrap_or(false));
+                ids.retain(|&id32| sigs.contains(id32 as usize).unwrap_or(false));
                 !ids.is_empty()
             });
         }
@@ -717,8 +724,8 @@ mod tests {
 
     #[test]
     fn test_jaccard_different_sizes() {
-        let sig1 = MinHashSignature::new(vec![1, 2, 3]);
-        let sig2 = MinHashSignature::new(vec![1, 2, 3, 4]);
+        let sig1 = MinHashSignature::new(vec![1u32, 2, 3]);
+        let sig2 = MinHashSignature::new(vec![1u32, 2, 3, 4]);
 
         assert_eq!(sig1.jaccard_similarity(&sig2), 0.0);
     }

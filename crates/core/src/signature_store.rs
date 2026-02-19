@@ -4,9 +4,9 @@
 //! - Hot cache: In-memory HashMap for recent signatures (fast O(1) access)
 //! - Cold storage: Disk-backed sled database for older signatures
 //!
-//! At 15M records with 128-hash signatures (~1 KiB each), keeping all
-//! signatures in memory requires ~15 GB.  With a 2M-entry hot cache
-//! (~2 GB) and the rest on disk, peak RAM drops to a manageable level.
+//! At 15M records with 128-hash u32 signatures (~512 B each), keeping all
+//! signatures in memory requires ~7.5 GB.  With a 2M-entry hot cache
+//! (~1 GB) and the rest on disk, peak RAM drops to a manageable level.
 
 use crate::{Error, Result};
 use crate::minhash::MinHashSignature;
@@ -27,7 +27,7 @@ pub struct SignatureStoreConfig {
 impl Default for SignatureStoreConfig {
     fn default() -> Self {
         Self {
-            max_hot: 2_000_000, // ~2 GB for 128-hash signatures
+            max_hot: 2_000_000, // ~1 GB for 128-hash u32 signatures
             db_path: None,
         }
     }
@@ -56,24 +56,36 @@ impl TieredSignatureStore {
     ///
     /// `sig_size` is the number of u64 values per signature (e.g. 128).
     pub fn new(sig_size: usize, config: SignatureStoreConfig) -> Result<Self> {
+        // Limit sled's page cache to 64 MB (default is 1 GB) to avoid
+        // wasting RAM — most reads are served from the hot HashMap cache.
+        const SLED_CACHE_BYTES: u64 = 64 * 1024 * 1024;
+
         let (cold, temp_dir) = match config.db_path {
             Some(ref p) => {
-                let db = sled::open(p).map_err(|e| {
-                    Error::ProcessingError(format!(
-                        "Failed to open signature cold storage at {:?}: {}",
-                        p, e
-                    ))
-                })?;
+                let db = sled::Config::new()
+                    .path(p)
+                    .cache_capacity(SLED_CACHE_BYTES)
+                    .open()
+                    .map_err(|e| {
+                        Error::ProcessingError(format!(
+                            "Failed to open signature cold storage at {:?}: {}",
+                            p, e
+                        ))
+                    })?;
                 (db, None)
             }
             None => {
                 let dir = Self::make_temp_path();
-                let db = sled::open(&dir).map_err(|e| {
-                    Error::ProcessingError(format!(
-                        "Failed to open temporary signature storage at {:?}: {}",
-                        dir, e
-                    ))
-                })?;
+                let db = sled::Config::new()
+                    .path(&dir)
+                    .cache_capacity(SLED_CACHE_BYTES)
+                    .open()
+                    .map_err(|e| {
+                        Error::ProcessingError(format!(
+                            "Failed to open temporary signature storage at {:?}: {}",
+                            dir, e
+                        ))
+                    })?;
                 (db, Some(dir))
             }
         };
@@ -260,9 +272,9 @@ fn id_to_key(id: usize) -> [u8; 8] {
     (id as u64).to_be_bytes()
 }
 
-/// Serialize a MinHash signature as raw little-endian u64 bytes.
+/// Serialize a MinHash signature as raw little-endian u32 bytes.
 fn sig_to_bytes(sig: &MinHashSignature) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(sig.signature.len() * 8);
+    let mut buf = Vec::with_capacity(sig.signature.len() * 4);
     for &v in &sig.signature {
         buf.extend_from_slice(&v.to_le_bytes());
     }
@@ -271,19 +283,19 @@ fn sig_to_bytes(sig: &MinHashSignature) -> Vec<u8> {
 
 /// Deserialize raw bytes back into a MinHash signature.
 fn bytes_to_sig(bytes: &[u8], expected_len: usize) -> Result<MinHashSignature> {
-    let expected_bytes = expected_len * 8;
+    let expected_bytes = expected_len * 4;
     if bytes.len() != expected_bytes {
         return Err(Error::ProcessingError(format!(
-            "Signature byte length {} doesn't match expected {} ({} × 8)",
+            "Signature byte length {} doesn't match expected {} ({} × 4)",
             bytes.len(),
             expected_bytes,
             expected_len,
         )));
     }
     let mut signature = Vec::with_capacity(expected_len);
-    for chunk in bytes.chunks_exact(8) {
-        let arr: [u8; 8] = chunk.try_into().unwrap();
-        signature.push(u64::from_le_bytes(arr));
+    for chunk in bytes.chunks_exact(4) {
+        let arr: [u8; 4] = chunk.try_into().unwrap();
+        signature.push(u32::from_le_bytes(arr));
     }
     Ok(MinHashSignature::new(signature))
 }
@@ -296,8 +308,8 @@ fn cold_err(e: sled::Error) -> Error {
 mod tests {
     use super::*;
 
-    fn make_sig(size: usize, seed: u64) -> MinHashSignature {
-        let sig: Vec<u64> = (0..size).map(|i| seed.wrapping_add(i as u64)).collect();
+    fn make_sig(size: usize, seed: u32) -> MinHashSignature {
+        let sig: Vec<u32> = (0..size).map(|i| seed.wrapping_add(i as u32)).collect();
         MinHashSignature::new(sig)
     }
 
@@ -339,7 +351,7 @@ mod tests {
     fn test_clear() {
         let mut store = TieredSignatureStore::with_defaults(128).unwrap();
         for i in 0..10 {
-            store.insert(i, make_sig(128, i as u64)).unwrap();
+            store.insert(i, make_sig(128, i as u32)).unwrap();
         }
         assert_eq!(store.len(), 10);
 
@@ -358,7 +370,7 @@ mod tests {
 
         // Insert more than max_hot entries
         for i in 0..25 {
-            store.insert(i, make_sig(128, i as u64)).unwrap();
+            store.insert(i, make_sig(128, i as u32)).unwrap();
         }
 
         assert_eq!(store.len(), 25);
@@ -369,7 +381,7 @@ mod tests {
         for i in 0..25 {
             let sig = store.get(i).unwrap();
             assert!(sig.is_some(), "Signature {} not found", i);
-            assert_eq!(sig.unwrap(), make_sig(128, i as u64));
+            assert_eq!(sig.unwrap(), make_sig(128, i as u32));
         }
     }
 
@@ -410,7 +422,7 @@ mod tests {
     fn test_serialization_helpers() {
         let sig = make_sig(4, 100);
         let bytes = sig_to_bytes(&sig);
-        assert_eq!(bytes.len(), 32); // 4 × 8
+        assert_eq!(bytes.len(), 16); // 4 × 4 bytes (u32)
         let restored = bytes_to_sig(&bytes, 4).unwrap();
         assert_eq!(restored, sig);
     }
