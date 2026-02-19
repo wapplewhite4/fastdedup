@@ -428,7 +428,7 @@ async fn fuzzy_dedup(
     // Maps row_id → extracted field text for every kept record so we can
     // populate `matched_value` in the removed log without re-reading the file.
     // Uses disk-backed storage to bound memory at scale.
-    let mut field_values = disk_kv::DiskBackedStringMap::new(2_000_000)?;
+    let mut field_values = disk_kv::DiskBackedStringMap::new(500_000)?;
 
     // Open output writers unless this is a dry-run or stats-only pass.
     //

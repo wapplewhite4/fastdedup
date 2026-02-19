@@ -66,11 +66,11 @@ pub struct FuzzyDedupConfig {
     /// Text field to use for deduplication
     pub text_field: String,
     /// Maximum number of MinHash signatures to keep in the in-memory hot
-    /// cache.  Older signatures are spilled to an on-disk sled database.
-    /// Default: 2,000,000 (~1 GB for 128-hash u32 signatures).
+    /// cache.  Older signatures are spilled to a flat file on disk.
+    /// Default: 500,000 (~268 MB for 128-hash u32 signatures).
     pub max_hot_signatures: usize,
-    /// Directory for on-disk signature storage.  `None` → temporary
-    /// directory that is cleaned up automatically.
+    /// Path for on-disk signature storage file.  `None` → temporary
+    /// file that is cleaned up automatically.
     pub signature_store_path: Option<String>,
 }
 
@@ -87,7 +87,7 @@ impl Default for FuzzyDedupConfig {
             num_bands: 16,
             rows_per_band: 8,
             text_field: "text".to_string(),
-            max_hot_signatures: 2_000_000,
+            max_hot_signatures: 500_000,
             signature_store_path: None,
         }
     }

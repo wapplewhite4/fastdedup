@@ -97,7 +97,7 @@ fn run_fuzzy_inner(
 
     // Maps row_id → field text for kept records to populate `matched_value`.
     // Uses disk-backed storage to bound memory at scale.
-    let mut field_values = crate::disk_kv::DiskBackedStringMap::new(2_000_000)?;
+    let mut field_values = crate::disk_kv::DiskBackedStringMap::new(500_000)?;
 
     let mut total: usize = 0;
     let mut unique: usize = 0;
