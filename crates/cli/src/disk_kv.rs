@@ -1,39 +1,57 @@
 //! Disk-backed key-value store for field values.
 //!
-//! Wraps a bounded in-memory HashMap with sled overflow so that
-//! the `field_values` cache in fuzzy dedup doesn't grow unboundedly
-//! when processing large datasets.
+//! Uses a bounded in-memory HashMap with flat-file overflow so that
+//! the `field_values` cache in fuzzy dedup doesn't grow unboundedly.
+//! No sled, no mmap — just plain file I/O to keep RSS predictable.
 
 use std::collections::{HashMap, VecDeque};
+use std::fs::{File, OpenOptions};
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
 use anyhow::Result;
 
+/// Entry in the cold file index: byte offset + byte length.
+struct ColdEntry {
+    offset: u64,
+    len: u32,
+}
+
 /// A bounded string-value store: recent entries live in memory,
-/// older ones are spilled to sled.
+/// older ones are spilled to a flat file.
 pub struct DiskBackedStringMap {
     hot: HashMap<usize, String>,
-    cold: sled::Db,
+    cold_writer: BufWriter<File>,
+    cold_reader: BufReader<File>,
+    cold_index: HashMap<usize, ColdEntry>,
+    cold_write_pos: u64,
     insertion_order: VecDeque<usize>,
     max_hot: usize,
-    temp_dir: Option<PathBuf>,
+    temp_path: Option<PathBuf>,
 }
 
 impl DiskBackedStringMap {
     /// Create a new store with the given in-memory capacity.
     pub fn new(max_hot: usize) -> Result<Self> {
-        let dir = Self::make_temp_path();
-        // Limit sled page cache to 64 MB (default 1 GB is wasteful here)
-        let cold = sled::Config::new()
-            .path(&dir)
-            .cache_capacity(64 * 1024 * 1024)
-            .open()?;
+        let path = Self::make_temp_path();
+
+        let writer = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&path)?;
+
+        let reader = File::open(&path)?;
+
         Ok(Self {
             hot: HashMap::with_capacity(max_hot.min(500_000)),
-            cold,
+            cold_writer: BufWriter::with_capacity(64 * 1024, writer),
+            cold_reader: BufReader::with_capacity(4096, reader),
+            cold_index: HashMap::new(),
+            cold_write_pos: 0,
             insertion_order: VecDeque::with_capacity(max_hot.min(500_000)),
             max_hot,
-            temp_dir: Some(dir),
+            temp_path: Some(path),
         })
     }
 
@@ -48,24 +66,25 @@ impl DiskBackedStringMap {
     }
 
     /// Get a value by key.  Returns an owned `String`.
-    pub fn get(&self, id: &usize) -> Result<Option<String>> {
+    pub fn get(&mut self, id: &usize) -> Result<Option<String>> {
         if let Some(v) = self.hot.get(id) {
             return Ok(Some(v.clone()));
         }
-        let key = (*id as u64).to_be_bytes();
-        match self.cold.get(&key)? {
-            Some(bytes) => {
-                let s = String::from_utf8(bytes.to_vec())
-                    .unwrap_or_default();
-                Ok(Some(s))
-            }
-            None => Ok(None),
-        }
+        // Check cold file
+        let entry = match self.cold_index.get(id) {
+            Some(e) => e,
+            None => return Ok(None),
+        };
+
+        self.cold_writer.flush()?;
+        self.cold_reader.seek(SeekFrom::Start(entry.offset))?;
+        let mut buf = vec![0u8; entry.len as usize];
+        self.cold_reader.read_exact(&mut buf)?;
+        Ok(Some(String::from_utf8(buf).unwrap_or_default()))
     }
 
     fn evict(&mut self) -> Result<()> {
         let evict_count = (self.max_hot / 10).max(1);
-        let mut batch = sled::Batch::default();
         let mut evicted = 0;
 
         while evicted < evict_count {
@@ -74,13 +93,19 @@ impl DiskBackedStringMap {
                 None => break,
             };
             if let Some(value) = self.hot.remove(&id) {
-                let key = (id as u64).to_be_bytes();
-                batch.insert(&key, value.as_bytes());
+                let bytes = value.as_bytes();
+                let offset = self.cold_write_pos;
+                self.cold_writer.write_all(bytes)?;
+                self.cold_write_pos += bytes.len() as u64;
+                self.cold_index.insert(id, ColdEntry {
+                    offset,
+                    len: bytes.len() as u32,
+                });
                 evicted += 1;
             }
         }
 
-        self.cold.apply_batch(batch)?;
+        self.cold_writer.flush()?;
         Ok(())
     }
 
@@ -90,21 +115,15 @@ impl DiskBackedStringMap {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("dedup_field_values_{}_{}", std::process::id(), ts))
+        std::env::temp_dir().join(format!("dedup_fv_{}.bin", ts))
     }
 }
 
 impl Drop for DiskBackedStringMap {
     fn drop(&mut self) {
-        let _ = self.cold.flush();
-        // Replace with a temporary db so we can drop the original and delete
-        // its directory.
-        self.cold = sled::Config::new()
-            .temporary(true)
-            .open()
-            .expect("failed to open temp sled for cleanup");
-        if let Some(ref dir) = self.temp_dir {
-            let _ = std::fs::remove_dir_all(dir);
+        let _ = self.cold_writer.flush();
+        if let Some(ref path) = self.temp_path {
+            let _ = std::fs::remove_file(path);
         }
     }
 }

@@ -335,7 +335,7 @@ pub struct LSHIndex {
     /// signature slice.  Document IDs are stored as u32 to halve band-table
     /// memory (supports up to ~4 billion documents).
     bands: Vec<AHashMap<u64, Vec<u32>>>,
-    /// Tiered signature storage: hot in-memory cache + cold disk-backed sled.
+    /// Tiered signature storage: hot in-memory cache + cold flat file.
     /// Bounds memory usage regardless of dataset size.
     signatures: TieredSignatureStore,
     /// Fixed-seed hash builder for deterministic band-key hashing
@@ -533,7 +533,7 @@ impl LSHIndex {
     ///
     /// Returns an **owned** `MinHashSignature` because cold-storage lookups
     /// require deserialization.  Returns `Err` on I/O failure.
-    pub fn get_signature(&self, id: usize) -> Result<Option<MinHashSignature>> {
+    pub fn get_signature(&mut self, id: usize) -> Result<Option<MinHashSignature>> {
         self.signatures.get(id)
     }
 

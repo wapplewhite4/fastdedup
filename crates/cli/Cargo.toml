@@ -26,7 +26,6 @@ serde_yaml.workspace = true
 toml.workspace = true
 indicatif.workspace = true
 rayon.workspace = true
-sled.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
 

@@ -1,25 +1,29 @@
-//! Tiered signature storage with disk backing for MinHash signatures
+//! Tiered signature storage with flat-file disk backing
 //!
-//! Implements a two-tier storage system to bound memory usage at scale:
-//! - Hot cache: In-memory HashMap for recent signatures (fast O(1) access)
-//! - Cold storage: Disk-backed sled database for older signatures
+//! Replaces the previous sled-based cold storage with a simple append-only
+//! binary file + in-memory offset index.  This avoids sled's memory-mapped
+//! files which caused the OS page cache to balloon to 30-50 GB at scale.
 //!
-//! At 15M records with 128-hash u32 signatures (~512 B each), keeping all
-//! signatures in memory requires ~7.5 GB.  With a 2M-entry hot cache
-//! (~1 GB) and the rest on disk, peak RAM drops to a manageable level.
+//! Memory model at 15M records (128 u32 hashes per signature):
+//! - Offset index: HashMap<usize, u64> → 15M × ~16 B = ~240 MB
+//! - Hot cache (500K entries): 500K × 536 B = ~268 MB
+//! - Flat file on disk: 15M × 512 B = ~7.5 GB (disk only, not RAM)
+//! - **Total RAM: ~500 MB** for the signature store
 
 use crate::{Error, Result};
 use crate::minhash::MinHashSignature;
 use std::collections::{HashMap, VecDeque};
-use std::path::{Path, PathBuf};
-use tracing::{debug, info, warn};
+use std::fs::{File, OpenOptions};
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::path::PathBuf;
+use tracing::{debug, info};
 
 /// Configuration for tiered signature storage
 #[derive(Debug, Clone)]
 pub struct SignatureStoreConfig {
     /// Maximum number of signatures in hot cache before eviction
     pub max_hot: usize,
-    /// Path for cold storage database.  If `None`, a temporary directory
+    /// Path for cold storage file.  If `None`, a temporary file
     /// is created and cleaned up on `Drop`.
     pub db_path: Option<PathBuf>,
 }
@@ -27,18 +31,29 @@ pub struct SignatureStoreConfig {
 impl Default for SignatureStoreConfig {
     fn default() -> Self {
         Self {
-            max_hot: 2_000_000, // ~1 GB for 128-hash u32 signatures
+            max_hot: 500_000, // ~268 MB for 128-hash u32 signatures
             db_path: None,
         }
     }
 }
 
-/// Two-tier signature storage: hot in-memory HashMap + cold sled database.
+/// Two-tier signature storage: hot in-memory HashMap + cold flat file.
+///
+/// Cold storage is a simple append-only binary file.  Each signature is
+/// written as `sig_size` little-endian u32 values (fixed 512 bytes at
+/// 128 hashes).  An in-memory `HashMap<usize, u64>` maps document ID →
+/// byte offset in the file, costing only ~16 bytes per evicted record.
 pub struct TieredSignatureStore {
     /// Hot cache keyed by document ID
     hot: HashMap<usize, MinHashSignature>,
-    /// Cold storage (disk-backed)
-    cold: sled::Db,
+    /// Cold storage: append-only flat file
+    cold_writer: BufWriter<File>,
+    /// Cold storage: random-access reader (separate handle)
+    cold_reader: BufReader<File>,
+    /// Maps document ID → byte offset in the cold file
+    cold_index: HashMap<usize, u64>,
+    /// Current write position in the cold file
+    cold_write_pos: u64,
     /// Maximum hot-cache entries before eviction
     max_hot: usize,
     /// FIFO insertion order for eviction
@@ -47,81 +62,77 @@ pub struct TieredSignatureStore {
     count: usize,
     /// Number of hash values per signature (for deserialization)
     sig_size: usize,
-    /// If we created a temp directory, store its path for cleanup on Drop
-    temp_dir: Option<PathBuf>,
+    /// Size in bytes of one signature on disk
+    sig_bytes: usize,
+    /// If we created a temp file, store its path for cleanup on Drop
+    temp_path: Option<PathBuf>,
 }
 
 impl TieredSignatureStore {
     /// Create a new tiered signature store.
     ///
-    /// `sig_size` is the number of u64 values per signature (e.g. 128).
+    /// `sig_size` is the number of u32 values per signature (e.g. 128).
     pub fn new(sig_size: usize, config: SignatureStoreConfig) -> Result<Self> {
-        // Limit sled's page cache to 64 MB (default is 1 GB) to avoid
-        // wasting RAM — most reads are served from the hot HashMap cache.
-        const SLED_CACHE_BYTES: u64 = 64 * 1024 * 1024;
+        let sig_bytes = sig_size * 4; // u32 = 4 bytes each
 
-        let (cold, temp_dir) = match config.db_path {
-            Some(ref p) => {
-                let db = sled::Config::new()
-                    .path(p)
-                    .cache_capacity(SLED_CACHE_BYTES)
-                    .open()
-                    .map_err(|e| {
-                        Error::ProcessingError(format!(
-                            "Failed to open signature cold storage at {:?}: {}",
-                            p, e
-                        ))
-                    })?;
-                (db, None)
-            }
-            None => {
-                let dir = Self::make_temp_path();
-                let db = sled::Config::new()
-                    .path(&dir)
-                    .cache_capacity(SLED_CACHE_BYTES)
-                    .open()
-                    .map_err(|e| {
-                        Error::ProcessingError(format!(
-                            "Failed to open temporary signature storage at {:?}: {}",
-                            dir, e
-                        ))
-                    })?;
-                (db, Some(dir))
-            }
+        let (file_path, is_temp) = match config.db_path {
+            Some(ref p) => (p.clone(), false),
+            None => (Self::make_temp_path(), true),
         };
 
+        // Open file for writing (append) and a separate handle for reading
+        let writer_file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&file_path)
+            .map_err(|e| {
+                Error::ProcessingError(format!(
+                    "Failed to open signature cold file {:?}: {}", file_path, e
+                ))
+            })?;
+
+        let reader_file = File::open(&file_path).map_err(|e| {
+            Error::ProcessingError(format!(
+                "Failed to open signature cold file for reading {:?}: {}", file_path, e
+            ))
+        })?;
+
         info!(
-            "TieredSignatureStore: sig_size={}, max_hot={}, path={:?}",
-            sig_size,
-            config.max_hot,
-            config.db_path.as_deref().unwrap_or(Path::new("<temp>")),
+            "TieredSignatureStore: sig_size={}, sig_bytes={}, max_hot={}, path={:?}",
+            sig_size, sig_bytes, config.max_hot, file_path,
         );
 
         Ok(Self {
-            hot: HashMap::with_capacity(config.max_hot.min(1_000_000)),
-            cold,
+            hot: HashMap::with_capacity(config.max_hot.min(500_000)),
+            cold_writer: BufWriter::with_capacity(64 * 1024, writer_file),
+            cold_reader: BufReader::with_capacity(sig_bytes, reader_file),
+            cold_index: HashMap::new(),
+            cold_write_pos: 0,
             max_hot: config.max_hot,
-            insertion_order: VecDeque::with_capacity(config.max_hot.min(1_000_000)),
+            insertion_order: VecDeque::with_capacity(config.max_hot.min(500_000)),
             count: 0,
             sig_size,
-            temp_dir,
+            sig_bytes,
+            temp_path: if is_temp { Some(file_path) } else { None },
         })
     }
 
-    /// Create a store using all defaults (2M hot cache, temp directory).
+    /// Create a store using all defaults (500K hot cache, temp file).
     pub fn with_defaults(sig_size: usize) -> Result<Self> {
         Self::new(sig_size, SignatureStoreConfig::default())
     }
 
     /// Insert a signature.
     pub fn insert(&mut self, id: usize, signature: MinHashSignature) -> Result<()> {
-        // If already present, just update in place
+        // If already present in hot, just update in place
         if self.hot.contains_key(&id) {
             self.hot.insert(id, signature);
             return Ok(());
         }
-        if self.cold_contains(id)? {
-            self.cold_put(id, &signature)?;
+        // If already in cold, overwrite by appending new copy and updating index
+        if self.cold_index.contains_key(&id) {
+            self.cold_append(id, &signature)?;
             return Ok(());
         }
 
@@ -139,22 +150,21 @@ impl TieredSignatureStore {
     /// Retrieve a signature by document ID.
     ///
     /// Returns an **owned** `MinHashSignature` because cold-storage
-    /// lookups require deserialization.
-    pub fn get(&self, id: usize) -> Result<Option<MinHashSignature>> {
+    /// lookups require deserialization from disk.
+    pub fn get(&mut self, id: usize) -> Result<Option<MinHashSignature>> {
         // Check hot cache first
         if let Some(sig) = self.hot.get(&id) {
             return Ok(Some(sig.clone()));
         }
-        // Fall through to cold
+        // Fall through to cold file
         self.cold_get(id)
     }
 
     /// Check whether a signature exists (hot or cold) without fetching it.
+    ///
+    /// Cold check is O(1) — just an index lookup, no disk I/O.
     pub fn contains(&self, id: usize) -> Result<bool> {
-        if self.hot.contains_key(&id) {
-            return Ok(true);
-        }
-        self.cold_contains(id)
+        Ok(self.hot.contains_key(&id) || self.cold_index.contains_key(&id))
     }
 
     /// Remove a signature.
@@ -163,8 +173,8 @@ impl TieredSignatureStore {
             self.count = self.count.saturating_sub(1);
             return Ok(());
         }
-        let key = id_to_key(id);
-        if self.cold.remove(&key).map_err(cold_err)?.is_some() {
+        if self.cold_index.remove(&id).is_some() {
+            // The bytes remain in the file (append-only) but are unreachable.
             self.count = self.count.saturating_sub(1);
         }
         Ok(())
@@ -184,59 +194,82 @@ impl TieredSignatureStore {
     pub fn clear(&mut self) -> Result<()> {
         self.hot.clear();
         self.insertion_order.clear();
-        self.cold.clear().map_err(cold_err)?;
+        self.cold_index.clear();
+        // Truncate the cold file
+        self.cold_writer.get_mut().set_len(0).map_err(|e| {
+            Error::ProcessingError(format!("Failed to truncate cold file: {}", e))
+        })?;
+        self.cold_write_pos = 0;
         self.count = 0;
         Ok(())
     }
 
     // ---- internal helpers ----
 
-    /// Evict the oldest 10% of the hot cache to cold storage.
+    /// Evict the oldest 10% of the hot cache to the cold file.
     fn evict_to_cold(&mut self) -> Result<()> {
         let evict_count = (self.max_hot / 10).max(1);
-        debug!("Evicting {} signatures from hot to cold storage", evict_count);
+        debug!("Evicting {} signatures to cold file", evict_count);
 
-        let mut batch = sled::Batch::default();
         let mut evicted = 0;
-
         while evicted < evict_count {
             let id = match self.insertion_order.pop_front() {
                 Some(id) => id,
                 None => break,
             };
             if let Some(sig) = self.hot.remove(&id) {
-                let key = id_to_key(id);
-                let value = sig_to_bytes(&sig);
-                batch.insert(&key, value);
+                self.cold_append(id, &sig)?;
                 evicted += 1;
             }
-            // If the id was already removed from hot (e.g. via `remove()`),
-            // just skip it.
         }
 
-        self.cold.apply_batch(batch).map_err(cold_err)?;
-        debug!("Evicted {} signatures. hot={}, total={}", evicted, self.hot.len(), self.count);
+        self.cold_writer.flush().map_err(|e| {
+            Error::ProcessingError(format!("Failed to flush cold file: {}", e))
+        })?;
+
+        debug!("Evicted {} signatures. hot={}, cold={}, total={}",
+            evicted, self.hot.len(), self.cold_index.len(), self.count);
         Ok(())
     }
 
-    fn cold_get(&self, id: usize) -> Result<Option<MinHashSignature>> {
-        let key = id_to_key(id);
-        match self.cold.get(&key).map_err(cold_err)? {
-            Some(bytes) => Ok(Some(bytes_to_sig(&bytes, self.sig_size)?)),
-            None => Ok(None),
-        }
-    }
-
-    fn cold_contains(&self, id: usize) -> Result<bool> {
-        let key = id_to_key(id);
-        self.cold.contains_key(&key).map_err(cold_err)
-    }
-
-    fn cold_put(&self, id: usize, sig: &MinHashSignature) -> Result<()> {
-        let key = id_to_key(id);
-        let value = sig_to_bytes(sig);
-        self.cold.insert(&key, value).map_err(cold_err)?;
+    /// Append a signature to the cold file and record its offset.
+    fn cold_append(&mut self, id: usize, sig: &MinHashSignature) -> Result<()> {
+        let offset = self.cold_write_pos;
+        let bytes = sig_to_bytes(sig);
+        self.cold_writer.write_all(&bytes).map_err(|e| {
+            Error::ProcessingError(format!("Failed to write signature to cold file: {}", e))
+        })?;
+        self.cold_write_pos += bytes.len() as u64;
+        self.cold_index.insert(id, offset);
         Ok(())
+    }
+
+    /// Read a signature from the cold file by document ID.
+    fn cold_get(&mut self, id: usize) -> Result<Option<MinHashSignature>> {
+        let offset = match self.cold_index.get(&id) {
+            Some(&off) => off,
+            None => return Ok(None),
+        };
+
+        // Flush writer so the reader can see all data
+        self.cold_writer.flush().map_err(|e| {
+            Error::ProcessingError(format!("Failed to flush before cold read: {}", e))
+        })?;
+
+        self.cold_reader.seek(SeekFrom::Start(offset)).map_err(|e| {
+            Error::ProcessingError(format!(
+                "Failed to seek to offset {} in cold file: {}", offset, e
+            ))
+        })?;
+
+        let mut buf = vec![0u8; self.sig_bytes];
+        self.cold_reader.read_exact(&mut buf).map_err(|e| {
+            Error::ProcessingError(format!(
+                "Failed to read signature at offset {}: {}", offset, e
+            ))
+        })?;
+
+        Ok(Some(bytes_to_sig(&buf, self.sig_size)?))
     }
 
     fn make_temp_path() -> PathBuf {
@@ -245,32 +278,22 @@ impl TieredSignatureStore {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("dedup_sig_store_{}_{}", std::process::id(), ts))
+        std::env::temp_dir().join(format!("dedup_sig_{}.bin", ts))
     }
 }
 
 impl Drop for TieredSignatureStore {
     fn drop(&mut self) {
-        // Flush sled so it shuts down cleanly
-        if let Err(e) = self.cold.flush() {
-            warn!("Failed to flush signature cold storage on drop: {}", e);
-        }
-        // Drop the sled Db before removing the directory
-        drop(std::mem::replace(&mut self.cold, sled::Config::new().temporary(true).open().unwrap()));
-        if let Some(ref dir) = self.temp_dir {
-            if let Err(e) = std::fs::remove_dir_all(dir) {
-                debug!("Failed to remove temp signature store {:?}: {}", dir, e);
+        let _ = self.cold_writer.flush();
+        if let Some(ref path) = self.temp_path {
+            if let Err(e) = std::fs::remove_file(path) {
+                debug!("Failed to remove temp signature file {:?}: {}", path, e);
             }
         }
     }
 }
 
 // ---- serialization helpers ----
-
-/// Encode document ID as 8-byte big-endian key (for sled ordering).
-fn id_to_key(id: usize) -> [u8; 8] {
-    (id as u64).to_be_bytes()
-}
 
 /// Serialize a MinHash signature as raw little-endian u32 bytes.
 fn sig_to_bytes(sig: &MinHashSignature) -> Vec<u8> {
@@ -298,10 +321,6 @@ fn bytes_to_sig(bytes: &[u8], expected_len: usize) -> Result<MinHashSignature> {
         signature.push(u32::from_le_bytes(arr));
     }
     Ok(MinHashSignature::new(signature))
-}
-
-fn cold_err(e: sled::Error) -> Error {
-    Error::ProcessingError(format!("Signature cold storage error: {}", e))
 }
 
 #[cfg(test)]
