@@ -5,6 +5,8 @@
 pub mod runner;
 pub mod ui;
 
+use crate::resource_monitor;
+
 use std::io::Stdout;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -25,6 +27,10 @@ pub enum ProgressMsg {
         processed: u64,
         duplicates: u64,
         total: Option<u64>,
+    },
+    ResourceUpdate {
+        memory_mb: u64,
+        cpu_pct: f64,
     },
     Done(RunResults),
     Error(String),
@@ -60,6 +66,10 @@ pub struct RunProgress {
     pub processed: u64,
     pub duplicates: u64,
     pub start: Instant,
+    /// Resident Set Size in MB (updated by resource monitor thread)
+    pub memory_mb: u64,
+    /// CPU usage percentage across all cores (updated by resource monitor thread)
+    pub cpu_pct: f64,
 }
 
 // Focusable field indices per mode
@@ -276,6 +286,12 @@ impl App {
                         }
                     }
                 }
+                Ok(ProgressMsg::ResourceUpdate { memory_mb, cpu_pct }) => {
+                    if let Some(p) = &mut self.progress {
+                        p.memory_mb = memory_mb;
+                        p.cpu_pct = cpu_pct;
+                    }
+                }
                 Ok(ProgressMsg::Done(r)) => {
                     self.results = Some(r);
                     self.progress = None;
@@ -313,6 +329,8 @@ impl App {
             processed: 0,
             duplicates: 0,
             start: Instant::now(),
+            memory_mb: 0,
+            cpu_pct: 0.0,
         });
         self.screen = Screen::Running;
 
@@ -327,6 +345,9 @@ impl App {
         let bands = self.bands.parse::<usize>().ok();
         let rows_per_band = self.rows_per_band.parse::<usize>().ok();
         let normalize = self.normalize;
+
+        // Spawn resource-monitoring thread (samples every 1 s until run ends)
+        resource_monitor::spawn(tx.clone(), Duration::from_secs(1));
 
         std::thread::spawn(move || match mode {
             Mode::Fuzzy => runner::run_fuzzy(

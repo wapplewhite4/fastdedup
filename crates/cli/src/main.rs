@@ -5,6 +5,7 @@
 mod config;
 mod disk_kv;
 mod progress;
+mod resource_monitor;
 mod tui;
 
 use anyhow::Result;
