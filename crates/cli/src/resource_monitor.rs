@@ -9,6 +9,8 @@ use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use indicatif::ProgressBar;
+
 use crate::tui::ProgressMsg;
 
 /// Spawn a background thread that samples memory and CPU every `interval`
@@ -24,24 +26,7 @@ pub fn spawn(tx: Sender<ProgressMsg>, interval: Duration) {
         loop {
             thread::sleep(interval);
 
-            let memory_mb = read_rss_mb().unwrap_or(0);
-
-            let curr_cpu = read_cpu_jiffies();
-            let curr_time = Instant::now();
-            let elapsed_secs = curr_time.duration_since(prev_time).as_secs_f64();
-
-            let cpu_pct = if elapsed_secs > 0.0 && curr_cpu >= prev_cpu {
-                // jiffies are in 1/100 s units; scale to percentage of one core
-                let delta_jiffies = (curr_cpu - prev_cpu) as f64;
-                // delta_jiffies / 100.0 gives seconds of CPU used in this interval
-                // Divide by elapsed wall-clock seconds → fraction of one core
-                (delta_jiffies / 100.0 / elapsed_secs * 100.0).min(num_cpus() as f64 * 100.0)
-            } else {
-                0.0
-            };
-
-            prev_cpu = curr_cpu;
-            prev_time = curr_time;
+            let (memory_mb, cpu_pct) = sample(&mut prev_cpu, &mut prev_time);
 
             if tx
                 .send(ProgressMsg::ResourceUpdate {
@@ -55,6 +40,64 @@ pub fn spawn(tx: Sender<ProgressMsg>, interval: Duration) {
             }
         }
     });
+}
+
+/// Spawn a background thread that samples memory and CPU every `interval`
+/// and writes a formatted string into `bar`'s message.
+///
+/// Used by the CLI (non-TUI) progress reporter.  The thread exits when `bar`
+/// is finished (i.e. `bar.is_finished()` returns true).
+pub fn spawn_into_bar(bar: ProgressBar, interval: Duration) {
+    thread::spawn(move || {
+        let mut prev_cpu = read_cpu_jiffies();
+        let mut prev_time = Instant::now();
+
+        loop {
+            thread::sleep(interval);
+
+            if bar.is_finished() {
+                break;
+            }
+
+            let (memory_mb, cpu_pct) = sample(&mut prev_cpu, &mut prev_time);
+
+            let mem_str = if memory_mb == 0 {
+                "—".to_string()
+            } else if memory_mb >= 1024 {
+                format!("{:.1} GB", memory_mb as f64 / 1024.0)
+            } else {
+                format!("{} MB", memory_mb)
+            };
+
+            bar.set_message(format!("{mem_str} RAM | {cpu_pct:.1}% CPU"));
+        }
+    });
+}
+
+// ── Core sampling ─────────────────────────────────────────────────────────────
+
+/// Take one sample, updating `prev_cpu` / `prev_time` in-place.
+/// Returns `(memory_mb, cpu_pct)`.
+fn sample(prev_cpu: &mut u64, prev_time: &mut Instant) -> (u64, f64) {
+    let memory_mb = read_rss_mb().unwrap_or(0);
+
+    let curr_cpu = read_cpu_jiffies();
+    let curr_time = Instant::now();
+    let elapsed_secs = curr_time.duration_since(*prev_time).as_secs_f64();
+
+    let cpu_pct = if elapsed_secs > 0.0 && curr_cpu >= *prev_cpu {
+        // jiffies are in 1/100 s units; scale to percentage of one core
+        let delta_jiffies = (curr_cpu - *prev_cpu) as f64;
+        // delta_jiffies / 100.0 → seconds of CPU used; divide by wall-clock elapsed
+        (delta_jiffies / 100.0 / elapsed_secs * 100.0).min(num_cpus() as f64 * 100.0)
+    } else {
+        0.0
+    };
+
+    *prev_cpu = curr_cpu;
+    *prev_time = curr_time;
+
+    (memory_mb, cpu_pct)
 }
 
 // ── /proc helpers ────────────────────────────────────────────────────────────

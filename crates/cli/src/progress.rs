@@ -1,14 +1,18 @@
 //! Progress reporting and visualization for CLI
 
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+
+use crate::resource_monitor;
 
 /// Progress reporter with multiple progress bars
 pub struct ProgressReporter {
     _multi: MultiProgress,
     main_bar: ProgressBar,
     stats_bar: ProgressBar,
+    resource_bar: ProgressBar,
     _start_time: Instant,
     mode: ProgressMode,
 }
@@ -43,10 +47,21 @@ impl ProgressReporter {
                 .unwrap(),
         );
 
+        // Resource bar for memory and CPU usage
+        let resource_bar = multi.add(ProgressBar::new(0));
+        resource_bar.set_style(
+            ProgressStyle::default_bar()
+                .template("Sys:   {msg}")
+                .unwrap(),
+        );
+        resource_bar.set_message("collecting…");
+        resource_monitor::spawn_into_bar(resource_bar.clone(), Duration::from_secs(1));
+
         Self {
             _multi: multi,
             main_bar,
             stats_bar,
+            resource_bar,
             _start_time: Instant::now(),
             mode: ProgressMode::Bytes,
         }
@@ -73,10 +88,21 @@ impl ProgressReporter {
                 .unwrap(),
         );
 
+        // Resource bar for memory and CPU usage
+        let resource_bar = multi.add(ProgressBar::new(0));
+        resource_bar.set_style(
+            ProgressStyle::default_bar()
+                .template("Sys:   {msg}")
+                .unwrap(),
+        );
+        resource_bar.set_message("collecting…");
+        resource_monitor::spawn_into_bar(resource_bar.clone(), Duration::from_secs(1));
+
         Self {
             _multi: multi,
             main_bar,
             stats_bar,
+            resource_bar,
             _start_time: Instant::now(),
             mode: ProgressMode::Records,
         }
@@ -93,7 +119,7 @@ impl ProgressReporter {
             }
         }
 
-        self.main_bar.set_message(format!("Processing..."));
+        self.main_bar.set_message("Processing...");
 
         let stats_msg = if duplicates > 0 && filtered > 0 {
             format!(
@@ -129,6 +155,7 @@ impl ProgressReporter {
     pub fn finish(&self) {
         self.main_bar.finish_with_message("Complete!");
         self.stats_bar.finish();
+        self.resource_bar.finish();
     }
 
     /// Format large numbers with thousand separators
