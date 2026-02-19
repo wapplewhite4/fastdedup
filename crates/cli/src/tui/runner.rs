@@ -4,7 +4,6 @@
 //! `ProgressMsg` updates over an `mpsc` channel.  The TUI polls
 //! the channel every 50 ms without blocking the event loop.
 
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -89,6 +88,7 @@ fn run_fuzzy_inner(
         word_shingles,
         num_bands,
         rows_per_band,
+        ..Default::default()
     };
     let mut deduplicator = FuzzyDeduplicator::with_config(config);
 
@@ -96,7 +96,8 @@ fn run_fuzzy_inner(
     let mut removed_writer = BufWriter::new(File::create(&removed_output)?);
 
     // Maps row_id → field text for kept records to populate `matched_value`.
-    let mut field_values: HashMap<usize, String> = HashMap::new();
+    // Uses disk-backed storage to bound memory at scale.
+    let mut field_values = crate::disk_kv::DiskBackedStringMap::new(2_000_000)?;
 
     let mut total: usize = 0;
     let mut unique: usize = 0;
@@ -135,14 +136,15 @@ fn run_fuzzy_inner(
             match dups {
                 None => {
                     unique += 1;
-                    field_values.insert(row_id, field_text);
+                    field_values.insert(row_id, field_text)?;
                     writeln!(clean_writer, "{}", serde_json::to_string(&record.data)?)?;
                 }
                 Some(ref dup_matches) => {
                     duplicates += 1;
                     for &(dup_id, sim) in dup_matches {
-                        let matched_value =
-                            field_values.get(&dup_id).map(|s| s.as_str()).unwrap_or("");
+                        let matched_value = field_values
+                            .get(&dup_id)?
+                            .unwrap_or_default();
                         let entry = serde_json::json!({
                             "row_id": row_id,
                             "duplicate_of_row_id": dup_id,

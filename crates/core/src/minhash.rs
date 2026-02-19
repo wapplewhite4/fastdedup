@@ -38,6 +38,9 @@ use std::collections::HashSet;
 use std::hash::{BuildHasher, Hash, Hasher};
 use tracing::{debug, info};
 
+use crate::Result;
+use crate::signature_store::{TieredSignatureStore, SignatureStoreConfig};
+
 /// Type alias: ahash-backed HashMap for internal use (faster than SipHash for
 /// non-adversarial keys).
 type AHashMap<K, V> = std::collections::HashMap<K, V, RandomState>;
@@ -315,7 +318,7 @@ fn hash_band_key(slice: &[u64], hash_builder: &RandomState) -> u64 {
 /// Uses several performance optimizations over a naive implementation:
 /// - Pre-hashed u64 band keys (avoids Vec allocation per lookup)
 /// - ahash-backed HashMaps (faster than default SipHash)
-/// - Vec-backed signature storage (O(1) indexed access)
+/// - Tiered signature storage (hot in-memory + cold on disk)
 /// - Capped candidate verification (bounded worst-case cost)
 /// - Capacity-hint pre-allocation
 /// - Periodic compaction of stale IDs
@@ -327,12 +330,9 @@ pub struct LSHIndex {
     /// Hash tables for each band, keyed by a pre-hashed u64 of the band
     /// signature slice (avoids Vec<u64> allocation and SipHash overhead)
     bands: Vec<AHashMap<u64, Vec<usize>>>,
-    /// Stored signatures in a Vec indexed by document ID for O(1) access.
-    /// Since IDs are sequential 0..N, this is far more cache-friendly than
-    /// a HashMap.
-    signatures: Vec<Option<MinHashSignature>>,
-    /// Number of signatures actually stored (non-None entries)
-    sig_count: usize,
+    /// Tiered signature storage: hot in-memory cache + cold disk-backed sled.
+    /// Bounds memory usage regardless of dataset size.
+    signatures: TieredSignatureStore,
     /// Fixed-seed hash builder for deterministic band-key hashing
     band_hash_builder: RandomState,
     /// Number of insertions since last compaction
@@ -351,6 +351,15 @@ impl LSHIndex {
     /// Configuration: 32 bands × 4 rows = 128 hash functions total
     /// This catches similarities > 0.7 with high probability
     pub fn new(num_bands: usize, rows_per_band: usize) -> Self {
+        Self::with_store_config(num_bands, rows_per_band, SignatureStoreConfig::default())
+    }
+
+    /// Create a new LSH index with a custom signature store configuration.
+    pub fn with_store_config(
+        num_bands: usize,
+        rows_per_band: usize,
+        store_config: SignatureStoreConfig,
+    ) -> Self {
         info!(
             "Creating LSH index with {} bands, {} rows per band",
             num_bands, rows_per_band
@@ -363,16 +372,19 @@ impl LSHIndex {
             0x0123456789abcdef,
         );
 
+        let sig_size = num_bands * rows_per_band;
         let bands = (0..num_bands)
             .map(|_| AHashMap::with_hasher(hash_builder.clone()))
             .collect();
+
+        let signatures = TieredSignatureStore::new(sig_size, store_config)
+            .expect("Failed to initialize signature store");
 
         Self {
             num_bands,
             rows_per_band,
             bands,
-            signatures: Vec::new(),
-            sig_count: 0,
+            signatures,
             band_hash_builder: hash_builder,
             insertions_since_compact: 0,
             compact_interval: 100_000,
@@ -396,6 +408,7 @@ impl LSHIndex {
             0x0123456789abcdef,
         );
 
+        let sig_size = num_bands * rows_per_band;
         let per_band_capacity = expected_records / num_bands.max(1);
         let bands = (0..num_bands)
             .map(|_| {
@@ -403,15 +416,14 @@ impl LSHIndex {
             })
             .collect();
 
-        let mut signatures = Vec::with_capacity(expected_records);
-        signatures.resize_with(expected_records, || None);
+        let signatures = TieredSignatureStore::with_defaults(sig_size)
+            .expect("Failed to initialize signature store");
 
         Self {
             num_bands,
             rows_per_band,
             bands,
             signatures,
-            sig_count: 0,
             band_hash_builder: hash_builder,
             insertions_since_compact: 0,
             compact_interval: 100_000,
@@ -433,13 +445,6 @@ impl LSHIndex {
             );
         }
 
-        // Grow the Vec if needed to accommodate this id
-        if id >= self.signatures.len() {
-            self.signatures.resize_with(id + 1, || None);
-        }
-        self.signatures[id] = Some(signature.clone());
-        self.sig_count += 1;
-
         // Insert into each band's hash table using pre-hashed u64 keys
         for band_idx in 0..self.num_bands {
             let start = band_idx * self.rows_per_band;
@@ -450,6 +455,14 @@ impl LSHIndex {
                 .entry(band_key)
                 .or_insert_with(Vec::new)
                 .push(id);
+        }
+
+        // Store signature in tiered storage (hot cache + cold disk)
+        if let Err(e) = self.signatures.insert(id, signature) {
+            // Log but don't panic — band tables are already updated, so
+            // queries will still find this ID; we just won't be able to
+            // verify it later if it gets evicted.
+            tracing::warn!("Failed to store signature for document {}: {}", id, e);
         }
 
         self.insertions_since_compact += 1;
@@ -492,7 +505,7 @@ impl LSHIndex {
                 for &id in ids {
                     // Only include IDs that still have a valid signature
                     // (filters out stale entries from removed duplicates)
-                    if id < self.signatures.len() && self.signatures[id].is_some() {
+                    if self.signatures.contains(id).unwrap_or(false) {
                         candidates.insert(id);
                         if candidates.len() >= MAX_CANDIDATES_PER_QUERY {
                             let result: Vec<usize> = candidates.into_iter().collect();
@@ -509,19 +522,22 @@ impl LSHIndex {
         result
     }
 
-    /// Get a stored signature by ID
-    pub fn get_signature(&self, id: usize) -> Option<&MinHashSignature> {
-        self.signatures.get(id).and_then(|opt| opt.as_ref())
+    /// Get a stored signature by ID.
+    ///
+    /// Returns an **owned** `MinHashSignature` because cold-storage lookups
+    /// require deserialization.  Returns `Err` on I/O failure.
+    pub fn get_signature(&self, id: usize) -> Result<Option<MinHashSignature>> {
+        self.signatures.get(id)
     }
 
     /// Get the number of documents indexed
     pub fn len(&self) -> usize {
-        self.sig_count
+        self.signatures.len()
     }
 
     /// Check if the index is empty
     pub fn is_empty(&self) -> bool {
-        self.sig_count == 0
+        self.signatures.is_empty()
     }
 
     /// Clear all indexed data
@@ -529,8 +545,9 @@ impl LSHIndex {
         for band in &mut self.bands {
             band.clear();
         }
-        self.signatures.clear();
-        self.sig_count = 0;
+        if let Err(e) = self.signatures.clear() {
+            tracing::warn!("Failed to clear signature store: {}", e);
+        }
         self.insertions_since_compact = 0;
     }
 
@@ -543,7 +560,7 @@ impl LSHIndex {
         let sigs = &self.signatures;
         for band in &mut self.bands {
             band.retain(|_key, ids| {
-                ids.retain(|&id| id < sigs.len() && sigs[id].is_some());
+                ids.retain(|&id| sigs.contains(id).unwrap_or(false));
                 !ids.is_empty()
             });
         }
@@ -560,13 +577,12 @@ impl LSHIndex {
 
     /// Remove a signature from the index.
     ///
-    /// Marks the signature slot as None (O(1)) but does not immediately
-    /// remove the ID from band buckets.  Stale band entries are filtered
-    /// during `query()` and fully cleaned up during `compact()`.
+    /// Removes from the tiered store but does not immediately remove the
+    /// ID from band buckets.  Stale band entries are filtered during
+    /// `query()` and fully cleaned up during `compact()`.
     pub fn remove_signature(&mut self, id: usize) {
-        if id < self.signatures.len() && self.signatures[id].is_some() {
-            self.signatures[id] = None;
-            self.sig_count -= 1;
+        if let Err(e) = self.signatures.remove(id) {
+            tracing::warn!("Failed to remove signature {}: {}", id, e);
         }
     }
 }
@@ -767,11 +783,11 @@ mod tests {
         index.insert(0, sig);
 
         assert_eq!(index.len(), 1);
-        assert!(index.get_signature(0).is_some());
+        assert!(index.get_signature(0).unwrap().is_some());
 
         index.remove_signature(0);
         assert_eq!(index.len(), 0);
-        assert!(index.get_signature(0).is_none());
+        assert!(index.get_signature(0).unwrap().is_none());
     }
 
     #[test]
