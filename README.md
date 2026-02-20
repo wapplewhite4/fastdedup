@@ -131,7 +131,7 @@ fastdedup tui
 
 ### `exact-dedup`
 
-Report exact-duplicate statistics using content hashing.
+Remove exact duplicates using content hashing.
 
 ```
 fastdedup exact-dedup [OPTIONS] -i <INPUT> -o <OUTPUT>
@@ -140,15 +140,11 @@ fastdedup exact-dedup [OPTIONS] -i <INPUT> -o <OUTPUT>
 | Option | Default | Description |
 |--------|---------|-------------|
 | `-i, --input` | required | Input file (JSONL, JSONL.gz, or Parquet) |
-| `-o, --output` | required | Output path (shown in the summary report) |
+| `-o, --output` | required | Output file (JSONL or Parquet, auto-detected by extension) |
 | `-f, --field` | full record | Field to hash. Omit to hash the entire JSON record |
-| `-n, --normalize` | off | Accepted but currently has no effect |
+| `-n, --normalize` | off | Lowercase + trim before hashing (`--field` required) |
 | `--dry-run` | off | Print statistics without writing output |
 | `--stats-only` | off | Print statistics only |
-
-> **Note:** The CLI `exact-dedup` command currently runs in statistics-reporting mode
-> only — it counts and reports duplicates but does not write a deduplicated output file.
-> To write exact-deduplicated output use the interactive TUI (`fastdedup tui`).
 
 **How it works.** Each record is hashed with `ahash`. A Bloom filter (1% false-positive
 rate) provides a fast negative check; positives are confirmed against an in-memory

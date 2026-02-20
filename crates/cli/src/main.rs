@@ -280,16 +280,32 @@ async fn exact_dedup(
 
     let mut reader = open_dataset(&input)?;
 
-    let strategy = match field {
-        Some(f) => HashStrategy::Field(f),
-        None => HashStrategy::FullContent,
+    let strategy = match (field, normalize) {
+        (Some(f), true)  => HashStrategy::Normalized(f),
+        (Some(f), false) => HashStrategy::Field(f),
+        (None, _)        => HashStrategy::FullContent,
     };
 
     let mut deduplicator = ExactDeduplicator::new(strategy);
 
-    // Note: Normalization should be integrated into the deduplicator itself
-    // For now, we just use the normalize flag to indicate intent
-    let _normalize_flag = normalize;
+    let write_output = !dry_run && !stats_only;
+
+    let output_is_parquet = output
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e == "parquet")
+        .unwrap_or(false);
+
+    let mut clean_writer: Option<BufWriter<File>> = None;
+    let mut clean_parquet_writer: Option<ParquetWriter> = None;
+
+    if write_output {
+        if output_is_parquet {
+            clean_parquet_writer = Some(ParquetWriter::open(&output)?);
+        } else {
+            clean_writer = Some(BufWriter::new(File::create(&output)?));
+        }
+    }
 
     let mut total = 0;
     let mut unique = 0;
@@ -307,10 +323,13 @@ async fn exact_dedup(
         let record = result?;
         total += 1;
 
-        // Pass the record directly to the deduplicator
-        // It handles field extraction based on the HashStrategy
         if !deduplicator.is_duplicate(&record.data) {
             unique += 1;
+            if let Some(ref mut w) = clean_writer {
+                writeln!(w, "{}", serde_json::to_string(&record.data)?)?;
+            } else if let Some(ref mut w) = clean_parquet_writer {
+                w.write_record(&record)?;
+            }
         } else {
             duplicates += 1;
         }
@@ -318,6 +337,13 @@ async fn exact_dedup(
         if total % 1000 == 0 {
             progress.update(reader.bytes_processed(), total, duplicates, 0);
         }
+    }
+
+    if let Some(ref mut w) = clean_writer {
+        w.flush()?;
+    }
+    if let Some(w) = clean_parquet_writer {
+        w.close()?;
     }
 
     progress.finish();
@@ -328,7 +354,7 @@ async fn exact_dedup(
     if json_output {
         let report = serde_json::json!({
             "input": input.to_string_lossy().to_string(),
-            "output": if stats_only { serde_json::Value::Null } else { serde_json::Value::String(output.to_string_lossy().to_string()) },
+            "output": if write_output { serde_json::Value::String(output.to_string_lossy().to_string()) } else { serde_json::Value::Null },
             "total_records": total,
             "unique_records": unique,
             "duplicates_removed": duplicates,
@@ -341,7 +367,7 @@ async fn exact_dedup(
     } else {
         progress::print_summary_report(
             &input,
-            if stats_only { None } else { Some(&output) },
+            if write_output { Some(&output) } else { None },
             total,
             unique,
             duplicates,
