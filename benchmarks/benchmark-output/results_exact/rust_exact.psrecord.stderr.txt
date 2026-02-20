@@ -1,0 +1,2 @@
+/root/dev/test-dedup/.venv/lib/python3.12/site-packages/psrecord/main.py:315: UserWarning: Attempting to set identical low and high ylims makes transformation singular; automatically expanding.
+  ax.set_ylim(0.0, max(log["cpu"]) * 1.2)

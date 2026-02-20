@@ -1,0 +1,77 @@
+2026-02-19 20:06:25.550 | INFO     | datatrove.utils.logging:add_task_logger:76 - Launching pipeline for rank=0
+2026-02-19 20:06:25.550 | INFO     | datatrove.utils.logging:log_pipeline:108 - 
+--- 🛠️ PIPELINE 🛠
+📖 - READER: 📒 Parquet
+🫂 - DEDUP: 🎯 MinHash stage 1
+2026-02-19 20:06:25.556 | INFO     | datatrove.pipeline.readers.base:read_files_shard:203 - Reading input file fineweb-10bt-merged.parquet, 1/1
+Traceback (most recent call last):
+  File "/root/dev/test-dedup/./benchmark-output/results_fuzzy/datatrove_fuzzy_baseline.py", line 48, in <module>
+    ).run()
+      ^^^^^
+  File "/root/dev/test-dedup/.venv/lib/python3.12/site-packages/datatrove/executor/local.py", line 129, in run
+    stats.append(self._launch_run_for_rank(rank, ranks_q))
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/dev/test-dedup/.venv/lib/python3.12/site-packages/datatrove/executor/local.py", line 76, in _launch_run_for_rank
+    return self._run_for_rank(rank, local_rank)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/dev/test-dedup/.venv/lib/python3.12/site-packages/datatrove/executor/base.py", line 132, in _run_for_rank
+    pipelined_data = pipeline_step(pipelined_data, rank, self.world_size)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/dev/test-dedup/.venv/lib/python3.12/site-packages/datatrove/pipeline/base.py", line 130, in __call__
+    return self.run(data, rank, world_size)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/dev/test-dedup/.venv/lib/python3.12/site-packages/datatrove/pipeline/dedup/minhash.py", line 250, in run
+    shingles = self.get_shingles(doc.text)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/dev/test-dedup/.venv/lib/python3.12/site-packages/datatrove/pipeline/dedup/minhash.py", line 205, in get_shingles
+    self.word_tokenizer.word_tokenize(simplify_text(text, self.config.norm_config)),
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/dev/test-dedup/.venv/lib/python3.12/site-packages/datatrove/utils/word_tokenizers.py", line 156, in word_tokenize
+    tokens = [token.text for tok_chunk in self._do_tokenize(text) for token in tok_chunk]
+                                          ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/dev/test-dedup/.venv/lib/python3.12/site-packages/datatrove/utils/word_tokenizers.py", line 143, in _do_tokenize
+    return [self.tokenizer(t, disable=["parser", "tagger", "ner"]) for t in texts]
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/dev/test-dedup/.venv/lib/python3.12/site-packages/spacy/language.py", line 1041, in __call__
+    doc = self._ensure_doc(text)
+          ^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/dev/test-dedup/.venv/lib/python3.12/site-packages/spacy/language.py", line 1132, in _ensure_doc
+    return self.make_doc(doc_like)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/dev/test-dedup/.venv/lib/python3.12/site-packages/spacy/language.py", line 1124, in make_doc
+    return self.tokenizer(text)
+           ^^^^^^^^^^^^^^^^^^^^
+  File "spacy/tokenizer.pyx", line 160, in spacy.tokenizer.Tokenizer.__call__
+  File "spacy/tokenizer.pyx", line 196, in spacy.tokenizer.Tokenizer._tokenize_affixes
+  File "spacy/tokenizer.pyx", line 400, in spacy.tokenizer.Tokenizer._tokenize
+  File "spacy/tokenizer.pyx", line 480, in spacy.tokenizer.Tokenizer._attach_tokens
+  File "spacy/vocab.pyx", line 205, in spacy.vocab.Vocab.get
+  File "spacy/vocab.pyx", line 234, in spacy.vocab.Vocab._new_lexeme
+  File "/root/dev/test-dedup/.venv/lib/python3.12/site-packages/spacy/lang/lex_attrs.py", line 144, in lower
+    def lower(string: str) -> str:
+    
+KeyboardInterrupt
+Command terminated by signal 2
+	Command being timed: "python3 ./benchmark-output/results_fuzzy/datatrove_fuzzy_baseline.py ./fineweb-10bt-merged.parquet ./benchmark-output/fuzzy_deduped_datatrove"
+	User time (seconds): 13797.60
+	System time (seconds): 15.67
+	Percent of CPU this job got: 100%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 3:50:09
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 1175456
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 20
+	Minor (reclaiming a frame) page faults: 2742237
+	Voluntary context switches: 42458
+	Involuntary context switches: 41891
+	Swaps: 0
+	File system inputs: 8192
+	File system outputs: 4231440
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

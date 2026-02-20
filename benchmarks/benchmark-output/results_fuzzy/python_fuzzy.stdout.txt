@@ -1,0 +1,4 @@
+Input     : ./fineweb-10bt-merged.parquet
+Output dir: ./benchmark-output/fuzzy_deduped_datatrove
+Field     : text
+Threshold : 0.8

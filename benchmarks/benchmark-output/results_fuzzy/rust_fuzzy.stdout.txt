@@ -1,0 +1,26 @@
+[2m2026-02-19T18:56:10.698225Z[0m [32m INFO[0m Starting fuzzy deduplication
+[2m2026-02-19T18:56:10.698268Z[0m [32m INFO[0m   Input: "./fineweb-10bt-merged.parquet"
+[2m2026-02-19T18:56:10.698273Z[0m [32m INFO[0m   Output: "./benchmark-output/fuzzy_deduped.parquet"
+[2m2026-02-19T18:56:10.698277Z[0m [32m INFO[0m   Threshold: 0.8
+[2m2026-02-19T18:56:10.698280Z[0m [32m INFO[0m   Field: text
+[2m2026-02-19T18:56:10.698283Z[0m [32m INFO[0m   MinHash functions: 128
+[2m2026-02-19T18:56:10.698286Z[0m [32m INFO[0m   Shingle: size=3 mode=char-ngrams
+[2m2026-02-19T18:56:10.698296Z[0m [32m INFO[0m   LSH: 16 bands × 8 rows per band
+[2m2026-02-19T18:56:10.698300Z[0m [32m INFO[0m Opening dataset: "./fineweb-10bt-merged.parquet" (format: parquet)
+[2m2026-02-19T18:56:10.701588Z[0m [32m INFO[0m Creating FuzzyDeduplicator with threshold 0.8, 128 hash functions
+[2m2026-02-19T18:56:10.701600Z[0m [32m INFO[0m Created MinHasher with 128 hash functions, char shingle size 3, mode=char-ngrams
+[2m2026-02-19T18:56:10.701605Z[0m [32m INFO[0m Creating LSH index with 16 bands, 8 rows per band
+[2m2026-02-19T18:56:10.701608Z[0m [32m INFO[0m SignatureStore: sig_size=128, in-memory flat Vec
+[2m2026-02-19T18:56:15.898310Z[0m [32m INFO[0m   Clean output:   "./benchmark-output/fuzzy_deduped.parquet"
+[2m2026-02-19T18:56:15.898331Z[0m [32m INFO[0m   Removed output: "./benchmark-output/fuzzy_deduped.removed.jsonl"
+
+════════════════════════════════════════════════════════════
+Dataset Deduplication Complete
+════════════════════════════════════════════════════════════
+Input:              ./fineweb-10bt-merged.parquet
+Output:             ./benchmark-output/fuzzy_deduped.parquet
+Total records:      14,868,862
+Duplicates removed: 105,044 (0.7%)
+Final dataset:      14,763,818 (99.3%)
+════════════════════════════════════════════════════════════
+  Removed records: "./benchmark-output/fuzzy_deduped.removed.jsonl" (105044 records with __duplicate_of annotation)
