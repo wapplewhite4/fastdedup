@@ -69,7 +69,7 @@ dataset-dedup tui
 
 ### `exact-dedup`
 
-Remove exact duplicates using content hashing.
+Report exact-duplicate statistics using content hashing.
 
 ```
 dataset-dedup exact-dedup [OPTIONS] -i <INPUT> -o <OUTPUT>
@@ -78,11 +78,15 @@ dataset-dedup exact-dedup [OPTIONS] -i <INPUT> -o <OUTPUT>
 | Option | Default | Description |
 |--------|---------|-------------|
 | `-i, --input` | required | Input file (JSONL, JSONL.gz, or Parquet) |
-| `-o, --output` | required | Output file |
+| `-o, --output` | required | Output path (shown in the summary report) |
 | `-f, --field` | full record | Field to hash. Omit to hash the entire JSON record |
-| `-n, --normalize` | off | Lowercase + trim before hashing |
+| `-n, --normalize` | off | Accepted but currently has no effect |
 | `--dry-run` | off | Print statistics without writing output |
 | `--stats-only` | off | Print statistics only |
+
+> **Note:** The CLI `exact-dedup` command currently runs in statistics-reporting mode
+> only — it counts and reports duplicates but does not write a deduplicated output file.
+> To write exact-deduplicated output use the interactive TUI (`dataset-dedup tui`).
 
 **How it works.** Each record is hashed with `ahash`. A Bloom filter (1% false-positive
 rate) provides a fast negative check; positives are confirmed against an in-memory
@@ -117,7 +121,23 @@ dataset-dedup fuzzy-dedup [OPTIONS] -i <INPUT> -o <OUTPUT>
 | `--dry-run` | off | Print statistics without writing output |
 | `--stats-only` | off | Print statistics only |
 
-**Output files.** For an output path `deduped.jsonl`, the command writes:
+**Output files.** The output format is determined by the file extension you supply:
+
+- `.jsonl` / `.json` — unique records written as JSON Lines (one record per line)
+- `.parquet` — unique records written as a valid Apache Parquet file (schema inferred
+  from the first batch of records)
+
+In addition, a companion audit file is always written alongside the clean output:
+
+- `<stem>.removed.jsonl` — one JSON object per removed duplicate (always JSONL regardless
+  of the clean-output format)
+
+Example for `deduped.parquet`:
+
+- `deduped.parquet` -- unique (kept) records in Parquet format
+- `deduped.removed.jsonl` -- one JSON object per removed duplicate:
+
+Example for `deduped.jsonl`:
 
 - `deduped.jsonl` -- unique (kept) records
 - `deduped.removed.jsonl` -- one JSON object per removed duplicate:
@@ -196,11 +216,9 @@ non-cryptographic hash). The deduplicator maintains:
 This two-layer design keeps the average lookup at ~1 hash + 1 bit-probe for
 unique records.
 
-For datasets exceeding available memory a **tiered hash storage** is available:
-an in-memory hot cache (default 10M hashes, ~160 MB) backed by an on-disk
-[sled](https://github.com/spacejam/sled) database. Eviction uses an LRU-like
-policy (evict 10% of the hot set at a time); frequently accessed cold hashes are
-promoted back.
+For large datasets a **tiered hash storage** is available as a library API
+(`dataset_dedup_core::hash_storage::TieredHashStorage`): an in-memory hot cache
+backed by an on-disk sled database. This is not currently exposed as a CLI flag.
 
 ### Fuzzy deduplication (MinHash + LSH)
 
@@ -411,11 +429,20 @@ Additional example configs in `examples/`:
 
 ## Supported formats
 
+### Input
+
 | Extension | Format | Notes |
 |-----------|--------|-------|
 | `.jsonl`, `.json` | JSON Lines | Streaming, line-by-line |
 | `.jsonl.gz`, `.json.gz` | Gzip JSONL | Auto-decompressed |
 | `.parquet` | Apache Parquet | Batch reading, column projection |
+
+### Output (`fuzzy-dedup`)
+
+| Extension | Format | Notes |
+|-----------|--------|-------|
+| `.jsonl`, `.json` | JSON Lines | One record per line |
+| `.parquet` | Apache Parquet | Schema inferred from first batch |
 
 Format is auto-detected from the file extension.
 
@@ -536,10 +563,11 @@ data-dedup/
 │   │       ├── hash.rs           # Hashing utilities
 │   │       ├── dedup.rs          # Basic dedup tracker
 │   │       └── error.rs          # Error types
-│   ├── formats/                  # File format readers
+│   ├── formats/                  # File format readers/writers
 │   │   └── src/
 │   │       ├── jsonl.rs          # JSONL streaming reader (+ gzip)
 │   │       ├── parquet_reader.rs # Parquet batch reader
+│   │       ├── parquet_writer.rs # Parquet streaming writer (schema inference)
 │   │       ├── reader.rs         # Unified DatasetReader trait
 │   │       └── record.rs         # Record data structure
 │   ├── filters/                  # Text processing + quality

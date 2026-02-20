@@ -177,18 +177,15 @@ for record in records:
 
 ### Memory Management
 
-**With --max-memory flag:**
-```bash
-# Limit memory to 8GB
-dataset-dedup exact-dedup --input large.jsonl --output clean.jsonl --max-memory 8GB
-```
+Memory usage is bounded by the deduplication algorithm:
 
-**Automatic memory management:**
-- Monitor usage every 1K records
-- Warn at 80% threshold
-- Switch to streaming mode at 90%
-- Flush caches to disk at 95%
-- Error at 100% (prevent OOM)
+- **Exact dedup:** ~12 bytes per unique record seen so far (8-byte hash + Bloom filter bits)
+- **Fuzzy dedup:** ~512 bytes per unique record for the MinHash signature (128 × 4-byte u32
+  values), plus LSH index overhead (~100 bytes per record)
+
+The CLI does not currently expose a `--max-memory` flag. If memory is a concern, use
+`--verbose` to monitor RSS/CPU usage in real time (shown in the progress line), and
+process the dataset in shards if needed.
 
 ## Performance Tips
 
@@ -198,41 +195,26 @@ dataset-dedup exact-dedup --input large.jsonl --output clean.jsonl --max-memory 
 - **Near-duplicates**: Use fuzzy-dedup (slower but catches variants)
 - **Both**: Run exact first, then fuzzy on remaining data
 
-### 2. Optimize Chunk Size
-
-```bash
-# Small datasets: smaller chunks
-dataset-dedup exact-dedup --chunk-size 1000 ...
-
-# Large datasets: larger chunks
-dataset-dedup exact-dedup --chunk-size 10000 ...
-```
-
-### 3. Control Thread Count
-
-```bash
-# Use all CPU cores (default)
-dataset-dedup exact-dedup ...
-
-# Limit threads (useful for shared systems)
-dataset-dedup exact-dedup --threads 4 ...
-```
-
-### 4. Use Field-Based Hashing
+### 2. Use Field-Based Hashing
 
 ```bash
 # Hash only the "text" field (faster than full content)
 dataset-dedup exact-dedup --field text ...
+dataset-dedup fuzzy-dedup --field text ...
 ```
 
-### 5. Monitor Memory Usage
+### 3. Parallelism and chunk size
+
+The CLI uses [Rayon](https://github.com/rayon-rs/rayon) for data-parallel MinHash
+computation automatically, using all available CPU cores. The internal batch size is
+2 000 records. Neither of these is currently configurable via a CLI flag; the tool
+will saturate available cores without any additional flags.
+
+### 4. Monitor memory and CPU
 
 ```bash
-# Set memory limit to prevent OOM
-dataset-dedup exact-dedup --max-memory 8GB ...
-
-# Enable verbose logging to see memory stats
-dataset-dedup exact-dedup --verbose ...
+# Real-time memory (RSS) and CPU usage are shown in the progress line
+dataset-dedup fuzzy-dedup --verbose ...
 ```
 
 ## Hardware Recommendations
