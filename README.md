@@ -4,7 +4,7 @@ High-performance Rust CLI for deduplicating AI training datasets on a single mac
 Handles exact and fuzzy (near-duplicate) detection on datasets with tens of millions of
 records, reading and writing JSONL, gzip-compressed JSONL, and Apache Parquet.
 
-**[Blog post: Deduplicating 15 Million Records in 3 Minutes with Rust](https://YOUR_BLOG_URL_HERE)**
+**[Blog post: Deduplicating 15 Million Records in 3 Minutes with Rust](https://wapplewhite4.github.io/fastdedup/)**
 
 ## Benchmarks
 
