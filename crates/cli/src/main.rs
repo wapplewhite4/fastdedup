@@ -1,4 +1,4 @@
-//! Dataset Deduplication CLI
+//! fastdedup CLI
 //!
 //! High-performance tool for deduplicating and cleaning AI training datasets
 
@@ -11,7 +11,7 @@ mod tui;
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
-use dataset_dedup_formats::ParquetWriter;
+use fastdedup_formats::ParquetWriter;
 use rayon::prelude::*;
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -23,9 +23,9 @@ use config::PipelineConfig;
 use progress::ProgressReporter;
 
 #[derive(Parser)]
-#[command(name = "dataset-dedup")]
+#[command(name = "fastdedup")]
 #[command(version, about = "High-performance dataset deduplication and cleaning", long_about = None)]
-#[command(author = "Dataset Dedup Team")]
+#[command(author = "fastdedup")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -267,8 +267,8 @@ async fn exact_dedup(
     stats_only: bool,
     json_output: bool,
 ) -> Result<()> {
-    use dataset_dedup_core::exact_dedup::{ExactDeduplicator, HashStrategy};
-    use dataset_dedup_formats::open_dataset;
+    use fastdedup_core::exact_dedup::{ExactDeduplicator, HashStrategy};
+    use fastdedup_formats::open_dataset;
 
     info!("Starting exact deduplication");
     info!("  Input: {:?}", input);
@@ -380,8 +380,8 @@ async fn fuzzy_dedup(
     stats_only: bool,
     json_output: bool,
 ) -> Result<()> {
-    use dataset_dedup_core::fuzzy_dedup::{FuzzyDeduplicator, FuzzyDedupConfig};
-    use dataset_dedup_formats::open_dataset;
+    use fastdedup_core::fuzzy_dedup::{FuzzyDeduplicator, FuzzyDedupConfig};
+    use fastdedup_formats::open_dataset;
 
     // Resolve LSH band parameters.
     // Default 16 bands × 8 rows = 128 hashes.
@@ -612,9 +612,9 @@ async fn apply_filters(
     dry_run: bool,
     json_output: bool,
 ) -> Result<()> {
-    use dataset_dedup_filters::language::{LanguageFilter, LanguageFilterConfig};
-    use dataset_dedup_filters::quality::{QualityScorer, QualityConfig};
-    use dataset_dedup_formats::open_dataset;
+    use fastdedup_filters::language::{LanguageFilter, LanguageFilterConfig};
+    use fastdedup_filters::quality::{QualityScorer, QualityConfig};
+    use fastdedup_formats::open_dataset;
 
     info!("Applying quality filters");
     info!("  Input: {:?}", input);
@@ -718,7 +718,7 @@ async fn run_pipeline(
 }
 
 async fn inspect_dataset(input: PathBuf, limit: usize) -> Result<()> {
-    use dataset_dedup_formats::open_dataset;
+    use fastdedup_formats::open_dataset;
 
     info!("Inspecting dataset: {:?}", input);
 
@@ -749,7 +749,7 @@ async fn inspect_dataset(input: PathBuf, limit: usize) -> Result<()> {
 }
 
 async fn count_dataset(input: PathBuf) -> Result<()> {
-    use dataset_dedup_formats::open_dataset;
+    use fastdedup_formats::open_dataset;
     use indicatif::{ProgressBar, ProgressStyle};
 
     info!("Counting records in: {:?}", input);

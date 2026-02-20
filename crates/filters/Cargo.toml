@@ -1,5 +1,5 @@
 [package]
-name = "dataset-dedup-filters"
+name = "fastdedup-filters"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

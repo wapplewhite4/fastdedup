@@ -1,5 +1,5 @@
-use dataset_dedup_filters::language::{LanguageFilter, LanguageFilterConfig};
-use dataset_dedup_filters::quality::{QualityScorer, QualityConfig};
+use fastdedup_filters::language::{LanguageFilter, LanguageFilterConfig};
+use fastdedup_filters::quality::{QualityScorer, QualityConfig};
 
 fn main() {
     println!("🎯 Quality Filters Demo\n");

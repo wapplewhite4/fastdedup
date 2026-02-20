@@ -20,7 +20,7 @@ This directory contains example configuration files for the dataset deduplicatio
 ### Run Full Pipeline
 
 ```bash
-dataset-dedup pipeline \
+fastdedup pipeline \
   --input raw_dataset.jsonl \
   --output clean_dataset.jsonl \
   --config examples/config.yaml
@@ -29,7 +29,7 @@ dataset-dedup pipeline \
 ### Run Exact Deduplication
 
 ```bash
-dataset-dedup exact-dedup \
+fastdedup exact-dedup \
   --input raw_dataset.jsonl \
   --output deduped.jsonl \
   --field text \
@@ -39,7 +39,7 @@ dataset-dedup exact-dedup \
 ### Run Fuzzy Deduplication
 
 ```bash
-dataset-dedup fuzzy-dedup \
+fastdedup fuzzy-dedup \
   --input raw_dataset.jsonl \
   --output deduped.jsonl \
   --threshold 0.85 \
@@ -49,7 +49,7 @@ dataset-dedup fuzzy-dedup \
 ### Apply Quality Filters
 
 ```bash
-dataset-dedup filter \
+fastdedup filter \
   --input dataset.jsonl \
   --output filtered.jsonl \
   --config examples/filters-only.yaml
@@ -152,7 +152,7 @@ filters:
 
 3. Run with your config:
    ```bash
-   dataset-dedup pipeline \
+   fastdedup pipeline \
      --input mydata.jsonl \
      --output clean.jsonl \
      --config my-config.yaml
@@ -192,13 +192,13 @@ Generate completions for your shell:
 
 ```bash
 # Bash
-dataset-dedup completions bash > ~/.local/share/bash-completion/completions/dataset-dedup
+fastdedup completions bash > ~/.local/share/bash-completion/completions/fastdedup
 
 # Zsh
-dataset-dedup completions zsh > ~/.zsh/completions/_dataset-dedup
+fastdedup completions zsh > ~/.zsh/completions/_fastdedup
 
 # Fish
-dataset-dedup completions fish > ~/.config/fish/completions/dataset-dedup.fish
+fastdedup completions fish > ~/.config/fish/completions/fastdedup.fish
 ```
 
 ## Examples

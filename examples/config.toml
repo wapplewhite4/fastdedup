@@ -1,5 +1,5 @@
 # Example Pipeline Configuration (TOML)
-# Dataset Deduplication Tool
+# fastdedup
 
 [input]
 path = "raw_dataset.jsonl.gz"

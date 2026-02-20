@@ -1,12 +1,12 @@
 //! Performance benchmarks for deduplication algorithms
 //!
-//! Run with: cargo bench -p dataset-dedup-core
+//! Run with: cargo bench -p fastdedup-core
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use dataset_dedup_core::exact_dedup::{ExactDeduplicator, HashStrategy};
-use dataset_dedup_core::fuzzy_dedup::FuzzyDeduplicator;
-use dataset_dedup_core::minhash::MinHasher;
-use dataset_dedup_core::pipeline::PipelineBuilder;
+use fastdedup_core::exact_dedup::{ExactDeduplicator, HashStrategy};
+use fastdedup_core::fuzzy_dedup::FuzzyDeduplicator;
+use fastdedup_core::minhash::MinHasher;
+use fastdedup_core::pipeline::PipelineBuilder;
 use serde_json::json;
 
 /// Generate test data with configurable duplicate ratio

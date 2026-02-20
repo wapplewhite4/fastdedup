@@ -1,4 +1,4 @@
-# data-dedup
+# fastdedup
 
 High-performance Rust tool for deduplicating and cleaning AI training datasets.
 Handles exact and fuzzy (near-duplicate) detection on datasets with millions of
@@ -23,39 +23,39 @@ Requires Rust 1.70+.
 
 ```bash
 git clone <repository-url>
-cd data-dedup
+cd fastdedup
 
 # Option A: install the binary into ~/.cargo/bin (then it's on your PATH)
 cargo install --path crates/cli
 
 # Option B: build only, then run from the repo
 cargo build --release
-./target/release/dataset-dedup --help
+./target/release/fastdedup --help
 ```
 
-The binary is named `dataset-dedup`. After `cargo install` you can call it
+The binary is named `fastdedup`. After `cargo install` you can call it
 directly; with Option B prefix every command with `./target/release/`.
 
 ## Quick start
 
 ```bash
 # Inspect a dataset
-dataset-dedup inspect data.jsonl -n 5
+fastdedup inspect data.jsonl -n 5
 
 # Count records
-dataset-dedup count data.parquet
+fastdedup count data.parquet
 
 # Exact dedup on the "text" field
-dataset-dedup exact-dedup -i data.jsonl -o deduped.jsonl --field text
+fastdedup exact-dedup -i data.jsonl -o deduped.jsonl --field text
 
 # Fuzzy dedup at 85% similarity
-dataset-dedup fuzzy-dedup -i data.jsonl -o deduped.jsonl --threshold 0.85 --field text
+fastdedup fuzzy-dedup -i data.jsonl -o deduped.jsonl --threshold 0.85 --field text
 
 # Full pipeline from a config file
-dataset-dedup pipeline -i data.jsonl -o clean.jsonl --config pipeline.yaml
+fastdedup pipeline -i data.jsonl -o clean.jsonl --config pipeline.yaml
 
 # Interactive terminal UI
-dataset-dedup tui
+fastdedup tui
 ```
 
 ## Commands
@@ -72,7 +72,7 @@ dataset-dedup tui
 Report exact-duplicate statistics using content hashing.
 
 ```
-dataset-dedup exact-dedup [OPTIONS] -i <INPUT> -o <OUTPUT>
+fastdedup exact-dedup [OPTIONS] -i <INPUT> -o <OUTPUT>
 ```
 
 | Option | Default | Description |
@@ -86,7 +86,7 @@ dataset-dedup exact-dedup [OPTIONS] -i <INPUT> -o <OUTPUT>
 
 > **Note:** The CLI `exact-dedup` command currently runs in statistics-reporting mode
 > only — it counts and reports duplicates but does not write a deduplicated output file.
-> To write exact-deduplicated output use the interactive TUI (`dataset-dedup tui`).
+> To write exact-deduplicated output use the interactive TUI (`fastdedup tui`).
 
 **How it works.** Each record is hashed with `ahash`. A Bloom filter (1% false-positive
 rate) provides a fast negative check; positives are confirmed against an in-memory
@@ -104,7 +104,7 @@ rate) provides a fast negative check; positives are confirmed against an in-memo
 Remove near-duplicate records using MinHash + LSH.
 
 ```
-dataset-dedup fuzzy-dedup [OPTIONS] -i <INPUT> -o <OUTPUT>
+fastdedup fuzzy-dedup [OPTIONS] -i <INPUT> -o <OUTPUT>
 ```
 
 | Option | Default | Description |
@@ -159,7 +159,7 @@ Example for `deduped.jsonl`:
 Apply quality and language filters.
 
 ```
-dataset-dedup filter -i <INPUT> -o <OUTPUT> [--config filters.yaml]
+fastdedup filter -i <INPUT> -o <OUTPUT> [--config filters.yaml]
 ```
 
 ### `pipeline`
@@ -167,7 +167,7 @@ dataset-dedup filter -i <INPUT> -o <OUTPUT> [--config filters.yaml]
 Run a full dedup + filter pipeline from a YAML/TOML config.
 
 ```
-dataset-dedup pipeline -i <INPUT> -o <OUTPUT> --config pipeline.yaml [--dry-run]
+fastdedup pipeline -i <INPUT> -o <OUTPUT> --config pipeline.yaml [--dry-run]
 ```
 
 ### `inspect`
@@ -175,7 +175,7 @@ dataset-dedup pipeline -i <INPUT> -o <OUTPUT> --config pipeline.yaml [--dry-run]
 Print the first N records from a dataset.
 
 ```
-dataset-dedup inspect <FILE> [-n 10]
+fastdedup inspect <FILE> [-n 10]
 ```
 
 ### `count`
@@ -183,7 +183,7 @@ dataset-dedup inspect <FILE> [-n 10]
 Count records in a dataset.
 
 ```
-dataset-dedup count <FILE>
+fastdedup count <FILE>
 ```
 
 ### `completions`
@@ -191,9 +191,9 @@ dataset-dedup count <FILE>
 Generate shell completions.
 
 ```bash
-dataset-dedup completions bash > ~/.local/share/bash-completion/completions/dataset-dedup
-dataset-dedup completions zsh  > ~/.zsh/completions/_dataset-dedup
-dataset-dedup completions fish > ~/.config/fish/completions/dataset-dedup.fish
+fastdedup completions bash > ~/.local/share/bash-completion/completions/fastdedup
+fastdedup completions zsh  > ~/.zsh/completions/_fastdedup
+fastdedup completions fish > ~/.config/fish/completions/fastdedup.fish
 ```
 
 ### `tui`
@@ -217,7 +217,7 @@ This two-layer design keeps the average lookup at ~1 hash + 1 bit-probe for
 unique records.
 
 For large datasets a **tiered hash storage** is available as a library API
-(`dataset_dedup_core::hash_storage::TieredHashStorage`): an in-memory hot cache
+(`fastdedup_core::hash_storage::TieredHashStorage`): an in-memory hot cache
 backed by an on-disk sled database. This is not currently exposed as a CLI flag.
 
 ### Fuzzy deduplication (MinHash + LSH)
@@ -453,7 +453,7 @@ The workspace crates can be used as libraries independently.
 ### Reading datasets
 
 ```rust
-use dataset_dedup_formats::{open_dataset, DatasetReader};
+use fastdedup_formats::{open_dataset, DatasetReader};
 
 let mut reader = open_dataset("data.parquet")?;
 for result in reader.by_ref() {
@@ -466,7 +466,7 @@ println!("Processed {} records", reader.records_processed());
 ### Exact dedup
 
 ```rust
-use dataset_dedup_core::exact_dedup::{ExactDeduplicator, HashStrategy};
+use fastdedup_core::exact_dedup::{ExactDeduplicator, HashStrategy};
 
 let mut dedup = ExactDeduplicator::new(HashStrategy::Normalized("text".into()));
 // dedup.is_duplicate(&record.data) returns true for duplicates
@@ -475,7 +475,7 @@ let mut dedup = ExactDeduplicator::new(HashStrategy::Normalized("text".into()));
 ### Fuzzy dedup
 
 ```rust
-use dataset_dedup_core::fuzzy_dedup::{FuzzyDeduplicator, FuzzyDedupConfig};
+use fastdedup_core::fuzzy_dedup::{FuzzyDeduplicator, FuzzyDedupConfig};
 
 let config = FuzzyDedupConfig {
     similarity_threshold: 0.85,
@@ -498,7 +498,7 @@ match dedup.process_record(id, &record) {
 ### Tiered hash storage (for billion-scale datasets)
 
 ```rust
-use dataset_dedup_core::hash_storage::{TieredHashStorage, TieredStorageConfig};
+use fastdedup_core::hash_storage::{TieredHashStorage, TieredStorageConfig};
 
 let config = TieredStorageConfig {
     max_hot_size: 10_000_000,  // 10M hashes in memory (~160 MB)
@@ -512,7 +512,7 @@ let mut storage = TieredHashStorage::with_config(config)?;
 ### Text normalization
 
 ```rust
-use dataset_dedup_filters::text_preprocessing::TextNormalizer;
+use fastdedup_filters::text_preprocessing::TextNormalizer;
 
 let norm = TextNormalizer::aggressive();
 assert_eq!(norm.normalize("  Hello, WORLD!!!  "), "hello world");
@@ -530,8 +530,8 @@ Run benchmarks against Python baselines (pandas, polars, datasketch):
 ./benchmarks/run_fuzzy_comparison.sh
 
 # Rust micro-benchmarks
-cargo bench --package dataset-dedup-core
-cargo bench --package dataset-dedup-filters
+cargo bench --package fastdedup-core
+cargo bench --package fastdedup-filters
 ```
 
 See `benchmarks/README.md` for full setup instructions and expected results.
@@ -549,7 +549,7 @@ See `benchmarks/README.md` for full setup instructions and expected results.
 ## Project structure
 
 ```
-data-dedup/
+fastdedup/
 ├── Cargo.toml                    # Workspace root
 ├── crates/
 │   ├── core/                     # Deduplication engine
@@ -588,7 +588,7 @@ data-dedup/
 cargo test --workspace
 
 # Single crate
-cargo test -p dataset-dedup-core
+cargo test -p fastdedup-core
 
 # With debug logging
 RUST_LOG=debug cargo test

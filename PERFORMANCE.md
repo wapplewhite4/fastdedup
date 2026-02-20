@@ -6,13 +6,13 @@ Performance benchmarks for the dataset deduplication tool comparing different al
 
 ```bash
 # Run all benchmarks
-cargo bench -p dataset-dedup-core
+cargo bench -p fastdedup-core
 
 # Run specific benchmark
-cargo bench -p dataset-dedup-core --bench dedup_bench
+cargo bench -p fastdedup-core --bench dedup_bench
 
 # Generate HTML report
-cargo bench -p dataset-dedup-core -- --save-baseline main
+cargo bench -p fastdedup-core -- --save-baseline main
 ```
 
 Results are saved to `target/criterion/` with HTML reports.
@@ -112,8 +112,8 @@ Compares different hashing strategies.
 | Implementation | Time | Throughput | Memory | Speedup |
 |---------------|------|------------|---------|---------|
 | pandas | 45s | 22K/sec | 2.5 GB | 1x |
-| dataset-dedup (single) | 2.5s | 400K/sec | 150 MB | 18x |
-| dataset-dedup (parallel) | 0.8s | 1.25M/sec | 180 MB | 56x |
+| fastdedup (single) | 2.5s | 400K/sec | 150 MB | 18x |
+| fastdedup (parallel) | 0.8s | 1.25M/sec | 180 MB | 56x |
 
 ### vs. Python dedupe library
 
@@ -122,7 +122,7 @@ Compares different hashing strategies.
 | Implementation | Time | Throughput | Speedup |
 |---------------|------|------------|---------|
 | Python dedupe | 180s | 55/sec | 1x |
-| dataset-dedup | 12s | 833/sec | 15x |
+| fastdedup | 12s | 833/sec | 15x |
 
 ### vs. Custom Python Scripts
 
@@ -145,7 +145,7 @@ for record in records:
 |---------------|------|---------|---------|
 | Python (CPython) | 35s | 1.2 GB | 1x |
 | Python (PyPy) | 18s | 1.5 GB | 2x |
-| dataset-dedup | 2.5s | 150 MB | 14x |
+| fastdedup | 2.5s | 150 MB | 14x |
 
 ## Memory Usage
 
@@ -199,8 +199,8 @@ process the dataset in shards if needed.
 
 ```bash
 # Hash only the "text" field (faster than full content)
-dataset-dedup exact-dedup --field text ...
-dataset-dedup fuzzy-dedup --field text ...
+fastdedup exact-dedup --field text ...
+fastdedup fuzzy-dedup --field text ...
 ```
 
 ### 3. Parallelism and chunk size
@@ -214,7 +214,7 @@ will saturate available cores without any additional flags.
 
 ```bash
 # Real-time memory (RSS) and CPU usage are shown in the progress line
-dataset-dedup fuzzy-dedup --verbose ...
+fastdedup fuzzy-dedup --verbose ...
 ```
 
 ## Hardware Recommendations
@@ -251,13 +251,13 @@ We track performance regressions using Criterion's baseline comparison:
 
 ```bash
 # Save current performance as baseline
-cargo bench -p dataset-dedup-core -- --save-baseline main
+cargo bench -p fastdedup-core -- --save-baseline main
 
 # Compare against baseline
-cargo bench -p dataset-dedup-core -- --baseline main
+cargo bench -p fastdedup-core -- --baseline main
 
 # Generate comparison report
-cargo bench -p dataset-dedup-core -- --baseline main --save-baseline feature-x
+cargo bench -p fastdedup-core -- --baseline main --save-baseline feature-x
 ```
 
 Performance targets:

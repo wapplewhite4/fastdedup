@@ -57,9 +57,9 @@ time python3 benchmarks/baselines/streaming_fuzzy_dedup.py \
 echo ""
 
 echo "=========================================="
-echo "4. Rust Dataset-Dedup Fuzzy (YOUR TOOL)"
+echo "4. Rust fastdedup Fuzzy (YOUR TOOL)"
 echo "=========================================="
-time cargo run --release --package dataset-dedup-cli -- fuzzy-dedup \
+time cargo run --release --package fastdedup-cli -- fuzzy-dedup \
     --input "$INPUT_FILE" \
     --output "$OUTPUT_DIR/rust_fuzzy_output.parquet" \
     --field text \

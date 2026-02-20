@@ -4,7 +4,7 @@
 //! documents using MinHash signatures and LSH indexing.
 
 use crate::minhash::{LSHIndex, MinHasher, MinHashSignature};
-use dataset_dedup_filters::text_preprocessing::TextNormalizer;
+use fastdedup_filters::text_preprocessing::TextNormalizer;
 use serde_json::Value;
 use tracing::{debug, info, warn};
 

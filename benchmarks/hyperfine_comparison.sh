@@ -15,7 +15,7 @@ hyperfine \
     "python3 benchmarks/baselines/pandas_dedup.py $INPUT $OUTPUT_DIR/pandas_out.parquet" \
     "python3 benchmarks/baselines/polars_dedup.py $INPUT $OUTPUT_DIR/polars_out.parquet" \
     "python3 benchmarks/baselines/streaming_dedup.py $INPUT $OUTPUT_DIR/streaming_out.parquet" \
-    "cargo run --release --package dataset-dedup-cli -- exact-dedup -i $INPUT -o $OUTPUT_DIR/rust_out.parquet -f text"
+    "cargo run --release --package fastdedup-cli -- exact-dedup -i $INPUT -o $OUTPUT_DIR/rust_out.parquet -f text"
 
 echo ""
 echo "Results saved to:"

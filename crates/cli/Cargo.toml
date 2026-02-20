@@ -1,18 +1,18 @@
 [package]
-name = "dataset-dedup-cli"
+name = "fastdedup-cli"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "dataset-dedup"
+name = "fastdedup"
 path = "src/main.rs"
 
 [dependencies]
-dataset-dedup-core = { path = "../core" }
-dataset-dedup-formats = { path = "../formats" }
-dataset-dedup-filters = { path = "../filters" }
+fastdedup-core = { path = "../core" }
+fastdedup-formats = { path = "../formats" }
+fastdedup-filters = { path = "../filters" }
 
 anyhow.workspace = true
 clap.workspace = true

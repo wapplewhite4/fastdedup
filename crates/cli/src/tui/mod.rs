@@ -1,4 +1,4 @@
-//! Terminal UI for dataset-dedup
+//! Terminal UI for fastdedup
 //!
 //! Three-screen workflow: Config → Running → Results
 

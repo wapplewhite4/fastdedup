@@ -180,7 +180,7 @@ pub fn print_summary_report(
     filtered: usize,
 ) {
     println!("\n{}", "═".repeat(60));
-    println!("Dataset Deduplication Complete");
+    println!("fastdedup Complete");
     println!("{}", "═".repeat(60));
     println!("Input:              {}", input.display());
 

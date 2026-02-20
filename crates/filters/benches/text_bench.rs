@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
-use dataset_dedup_filters::text_preprocessing::TextNormalizer;
+use fastdedup_filters::text_preprocessing::TextNormalizer;
 
 fn bench_text_normalization(c: &mut Criterion) {
     let mut group = c.benchmark_group("text_normalization");

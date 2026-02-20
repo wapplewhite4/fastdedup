@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "🚀 Dataset Deduplication Testing Script"
+echo "🚀 fastdedup Testing Script"
 echo "========================================"
 echo ""
 
@@ -16,7 +16,7 @@ TEST_FILE="/tmp/test_dataset.jsonl"
 
 echo "Step 1: Generate test dataset"
 echo "------------------------------"
-cargo run --package dataset-dedup-cli --example generate_test_data "$TEST_FILE"
+cargo run --package fastdedup-cli --example generate_test_data "$TEST_FILE"
 echo ""
 
 echo "Step 2: Show original dataset"

@@ -19,7 +19,7 @@ hyperfine \
     "python3 benchmarks/baselines/pandas_fuzzy_dedup.py $INPUT $OUTPUT_DIR/pandas_fuzzy_out.parquet $THRESHOLD $NUM_PERM" \
     "python3 benchmarks/baselines/polars_fuzzy_dedup.py $INPUT $OUTPUT_DIR/polars_fuzzy_out.parquet $THRESHOLD $NUM_PERM" \
     "python3 benchmarks/baselines/streaming_fuzzy_dedup.py $INPUT $OUTPUT_DIR/streaming_fuzzy_out.parquet $THRESHOLD $NUM_PERM" \
-    "cargo run --release --package dataset-dedup-cli -- fuzzy-dedup -i $INPUT -o $OUTPUT_DIR/rust_fuzzy_out.parquet -f text --threshold $THRESHOLD --num-hashes $NUM_PERM"
+    "cargo run --release --package fastdedup-cli -- fuzzy-dedup -i $INPUT -o $OUTPUT_DIR/rust_fuzzy_out.parquet -f text --threshold $THRESHOLD --num-hashes $NUM_PERM"
 
 echo ""
 echo "Results saved to:"
