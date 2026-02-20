@@ -1,21 +1,83 @@
 # fastdedup
 
-High-performance Rust tool for deduplicating and cleaning AI training datasets.
-Handles exact and fuzzy (near-duplicate) detection on datasets with millions of
-records, reading JSONL, gzip-compressed JSONL, and Apache Parquet.
+High-performance Rust CLI for deduplicating AI training datasets on a single machine.
+Handles exact and fuzzy (near-duplicate) detection on datasets with tens of millions of
+records, reading and writing JSONL, gzip-compressed JSONL, and Apache Parquet.
+
+**[Blog post: Deduplicating 15 Million Records in 3 Minutes with Rust](https://YOUR_BLOG_URL_HERE)**
+
+## Benchmarks
+
+Tested on [FineWeb sample-10BT](https://huggingface.co/datasets/HuggingFaceFW/fineweb)
+— 14.8 million records, 29 GB on disk — on a Hetzner CCX43 (16 vCPU AMD EPYC Milan,
+64 GB RAM).
+
+### Exact deduplication
+
+|  | **fastdedup** | DuckDB + SHA-256 |
+|--|--|--|
+| Wall clock | **2m 55s** | 7m 55s |
+| Peak RAM | **688 MB** | 21.9 GB |
+| CPU cores used | 1 | 4+ |
+| Records/sec | ~85,000 | ~31,000 |
+| Duplicates found | 51,392 | 51,392 ✓ |
+
+2.7× faster, 32× less RAM, on a single core.
+
+### Fuzzy deduplication (MinHash + LSH)
+
+Baseline: [datatrove](https://github.com/huggingface/datatrove), the reference
+implementation used to produce FineWeb.
+
+|  | **fastdedup** | datatrove |
+|--|--|--|
+| Wall clock | **36m 44s** | 3h 50m+ (incomplete) |
+| Peak RAM | 23 GB | 1.1 GB |
+| CPU cores used | ~5.5 | 1 |
+| Completed | **Yes** | No |
+| Duplicates found | 105,044 | — |
+
+datatrove did not finish in under 4 hours. fastdedup completed the full run including
+output writing.
+
+> **RAM trade-off:** fastdedup keeps the LSH index in memory (23 GB peak on this
+> dataset). datatrove streams intermediate data to disk (1.1 GB RAM) at the cost of
+> heavy inter-stage I/O. On a machine with adequate RAM the in-memory approach is
+> significantly faster. See [System requirements](#system-requirements) below.
+
+Full methodology and raw results: `benchmarks/README.md`.
 
 ## Table of contents
 
+- [System requirements](#system-requirements)
 - [Installation](#installation)
 - [Quick start](#quick-start)
 - [Commands](#commands)
 - [Algorithms](#algorithms)
 - [Configuration](#configuration)
 - [Library usage](#library-usage)
-- [Benchmarks](#benchmarks)
 - [Project structure](#project-structure)
 - [Testing](#testing)
+- [Contributing](#contributing)
 - [License](#license)
+
+## System requirements
+
+- **Rust 1.70+** to build from source
+- **Exact dedup:** RAM scales with unique record count (~12 bytes/unique record).
+  The 29 GB FineWeb benchmark peaked at 688 MB.
+- **Fuzzy dedup:** RAM scales with total record count. The LSH index requires
+  roughly 1.5–2 KB per record. Rough estimates:
+
+  | Dataset size | Estimated peak RAM |
+  |---|---|
+  | 1M records | ~2 GB |
+  | 5M records | ~8 GB |
+  | 15M records | ~23 GB |
+  | 50M records | ~70 GB |
+
+  If RAM is constrained, reducing `--num-hashes` (e.g. 64 instead of 128) roughly
+  halves index memory at a small accuracy trade-off.
 
 ## Installation
 
@@ -518,15 +580,13 @@ let norm = TextNormalizer::aggressive();
 assert_eq!(norm.normalize("  Hello, WORLD!!!  "), "hello world");
 ```
 
-## Benchmarks
-
-Run benchmarks against Python baselines (pandas, polars, datasketch):
+## Reproducing benchmarks
 
 ```bash
-# Exact dedup
+# Exact dedup vs DuckDB
 ./benchmarks/run_comparison.sh
 
-# Fuzzy dedup
+# Fuzzy dedup vs datatrove
 ./benchmarks/run_fuzzy_comparison.sh
 
 # Rust micro-benchmarks
@@ -534,17 +594,9 @@ cargo bench --package fastdedup-core
 cargo bench --package fastdedup-filters
 ```
 
-See `benchmarks/README.md` for full setup instructions and expected results.
-
-**Representative throughput (single machine):**
-
-| Operation | Throughput |
-|-----------|-----------|
-| Exact dedup | ~500K records/sec |
-| Fuzzy dedup (MinHash + LSH) | ~10K records/sec |
-| Text normalization | ~100--200K docs/sec |
-| JSONL reading | ~500 MB/s |
-| Parquet reading (column projection) | ~1 GB/s |
+See `benchmarks/README.md` for full setup instructions. Benchmark results and
+methodology are summarised [at the top of this README](#benchmarks) and in the
+accompanying [blog post](https://YOUR_BLOG_URL_HERE).
 
 ## Project structure
 
@@ -594,6 +646,11 @@ cargo test -p fastdedup-core
 RUST_LOG=debug cargo test
 ```
 
+## Contributing
+
+Bug reports, feature requests, and pull requests are welcome. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
