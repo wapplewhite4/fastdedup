@@ -40,6 +40,7 @@ impl PipelineConfig {
     }
 
     /// Save configuration to a file
+    #[allow(dead_code)]
     pub fn save(&self, path: &Path) -> Result<()> {
         let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
 
@@ -61,6 +62,7 @@ impl PipelineConfig {
     }
 
     /// Create a default English-only pipeline config
+    #[allow(dead_code)]
     pub fn default_english() -> Self {
         Self {
             input: InputConfig {
@@ -90,6 +92,7 @@ impl PipelineConfig {
     }
 
     /// Create a multilingual pipeline config
+    #[allow(dead_code)]
     pub fn default_multilingual() -> Self {
         Self {
             input: InputConfig {

@@ -693,7 +693,7 @@ async fn run_pipeline(
     input: PathBuf,
     output: PathBuf,
     config_path: PathBuf,
-    dry_run: bool,
+    _dry_run: bool,
     json_output: bool,
 ) -> Result<()> {
     info!("Running deduplication pipeline");
