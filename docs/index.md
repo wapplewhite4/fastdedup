@@ -77,7 +77,7 @@ datatrove is also designed for distributed execution across hundreds of workers.
 
 The RAM difference is a real trade-off, not a clear win. datatrove streams intermediate data to disk (keeping RAM at 1.1GB) at the cost of heavy I/O between stages. `fastdedup` holds the LSH index in memory (23GB peak) for significantly faster processing. On a machine with sufficient RAM, the in-memory approach wins decisively on wall clock time.
 
-23GB is well within the capacity of a standard cloud instance (this benchmark ran on a €0.15/hr Hetzner CCX43). If RAM is constrained, configuring fewer hashes or a lower band count reduces memory usage at a slight accuracy trade-off.
+23GB is well within the capacity of a standard cloud instance (this benchmark ran on a $0.172/hr Hetzner CCX43). If RAM is constrained, configuring fewer hashes or a lower band count reduces memory usage at a slight accuracy trade-off.
 
 ---
 
