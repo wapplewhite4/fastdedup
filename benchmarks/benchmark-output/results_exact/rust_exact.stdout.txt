@@ -1,0 +1,17 @@
+[2m2026-02-20T00:01:20.610058Z[0m [32m INFO[0m Starting exact deduplication
+[2m2026-02-20T00:01:20.610085Z[0m [32m INFO[0m   Input: "./fineweb-10bt-merged.parquet"
+[2m2026-02-20T00:01:20.610090Z[0m [32m INFO[0m   Output: "./benchmark-output/exact_deduped.parquet"
+[2m2026-02-20T00:01:20.610094Z[0m [32m INFO[0m   Field: Some("text")
+[2m2026-02-20T00:01:20.610097Z[0m [32m INFO[0m   Normalize: true
+[2m2026-02-20T00:01:20.610105Z[0m [32m INFO[0m Opening dataset: "./fineweb-10bt-merged.parquet" (format: parquet)
+[2m2026-02-20T00:01:20.613237Z[0m [32m INFO[0m Creating ExactDeduplicator with capacity 10000000 and strategy Field("text")
+
+════════════════════════════════════════════════════════════
+Dataset Deduplication Complete
+════════════════════════════════════════════════════════════
+Input:              ./fineweb-10bt-merged.parquet
+Output:             ./benchmark-output/exact_deduped.parquet
+Total records:      14,868,862
+Duplicates removed: 51,392 (0.3%)
+Final dataset:      14,817,470 (99.7%)
+════════════════════════════════════════════════════════════

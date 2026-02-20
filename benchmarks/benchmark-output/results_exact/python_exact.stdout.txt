@@ -1,0 +1,5 @@
+Input  : ./fineweb-10bt-merged.parquet
+Output : ./benchmark-output/exact_deduped_python.parquet
+Field  : text
+Rows   : 14,868,862
+Count  : 0.02s
