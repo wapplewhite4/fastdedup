@@ -790,88 +790,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dataset-dedup-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "clap_complete",
- "crossterm",
- "dataset-dedup-core",
- "dataset-dedup-filters",
- "dataset-dedup-formats",
- "indicatif",
- "ratatui",
- "rayon",
- "serde",
- "serde_json",
- "serde_yaml",
- "tempfile",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "dataset-dedup-core"
-version = "0.1.0"
-dependencies = [
- "ahash",
- "anyhow",
- "bloomfilter",
- "criterion",
- "dataset-dedup-filters",
- "rayon",
- "regex",
- "seahash",
- "serde",
- "serde_json",
- "sled",
- "tempfile",
- "thiserror",
- "tokio",
- "tracing",
- "unicode-normalization",
-]
-
-[[package]]
-name = "dataset-dedup-filters"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bincode",
- "criterion",
- "rayon",
- "regex",
- "rustrict",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tracing",
- "unicode-normalization",
- "whatlang",
-]
-
-[[package]]
-name = "dataset-dedup-formats"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "arrow",
- "flate2",
- "parquet",
- "seahash",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "doc-comment"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -903,6 +821,88 @@ checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "fastdedup-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "clap_complete",
+ "crossterm",
+ "fastdedup-core",
+ "fastdedup-filters",
+ "fastdedup-formats",
+ "indicatif",
+ "ratatui",
+ "rayon",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "fastdedup-core"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "anyhow",
+ "bloomfilter",
+ "criterion",
+ "fastdedup-filters",
+ "rayon",
+ "regex",
+ "seahash",
+ "serde",
+ "serde_json",
+ "sled",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "unicode-normalization",
+]
+
+[[package]]
+name = "fastdedup-filters"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "criterion",
+ "rayon",
+ "regex",
+ "rustrict",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "unicode-normalization",
+ "whatlang",
+]
+
+[[package]]
+name = "fastdedup-formats"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arrow",
+ "flate2",
+ "parquet",
+ "seahash",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

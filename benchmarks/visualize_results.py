@@ -18,7 +18,7 @@ for result in data['results']:
     elif 'streaming' in command:
         tools.append('Streaming\nPython')
     else:
-        tools.append('Rust\nDataset-Dedup')
+        tools.append('Rust\nfastdedup')
 
     times.append(result['mean'])
 
@@ -34,7 +34,7 @@ for bar in bars:
             ha='center', va='bottom', fontweight='bold')
 
 ax.set_ylabel('Time (seconds)', fontsize=12)
-ax.set_title('Dataset Deduplication Performance Comparison', fontsize=14, fontweight='bold')
+ax.set_title('fastdedup Performance Comparison', fontsize=14, fontweight='bold')
 ax.set_ylim(0, max(times) * 1.15)
 
 # Add speedup annotation

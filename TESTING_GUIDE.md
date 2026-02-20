@@ -1,4 +1,4 @@
-# Dataset Deduplication - Testing Guide
+# fastdedup - Testing Guide
 
 This guide shows you how to actually deduplicate datasets using the tool.
 
@@ -7,7 +7,7 @@ This guide shows you how to actually deduplicate datasets using the tool.
 Run the automated test script:
 
 ```bash
-cd /home/user/data-dedup
+cd /home/user/fastdedup
 ./test_dedup.sh
 ```
 

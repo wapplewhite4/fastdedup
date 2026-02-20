@@ -1,6 +1,6 @@
 # Deduplication Benchmarks
 
-Comparing Rust dataset-dedup against Python baselines.
+Comparing Rust fastdedup against Python baselines.
 
 ## Setup
 
@@ -71,7 +71,7 @@ python3 benchmarks/baselines/streaming_dedup.py \
     benchmarks/output/streaming_out.parquet
 
 # Rust tool (exact dedup)
-cargo run --release --package dataset-dedup-cli -- exact-dedup \
+cargo run --release --package fastdedup-cli -- exact-dedup \
     --input test_data/wikipedia_sample.parquet \
     --output benchmarks/output/rust_out.parquet \
     --field text
@@ -113,7 +113,7 @@ python3 benchmarks/baselines/streaming_fuzzy_dedup.py \
     0.8 128
 
 # Rust fuzzy dedup
-cargo run --release --package dataset-dedup-cli -- fuzzy-dedup \
+cargo run --release --package fastdedup-cli -- fuzzy-dedup \
     --input test_data/wikipedia_sample.parquet \
     --output benchmarks/output_fuzzy/rust_out.parquet \
     --field text \

@@ -1,8 +1,8 @@
 //! Configuration file support for deduplication pipelines
 
 use anyhow::{Context, Result};
-use dataset_dedup_filters::language::LanguageFilterConfig;
-use dataset_dedup_filters::quality::QualityConfig;
+use fastdedup_filters::language::LanguageFilterConfig;
+use fastdedup_filters::quality::QualityConfig;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 

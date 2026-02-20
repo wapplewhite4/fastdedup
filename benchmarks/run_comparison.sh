@@ -6,7 +6,7 @@ OUTPUT_DIR="benchmarks/output"
 mkdir -p $OUTPUT_DIR
 
 echo "=========================================="
-echo "Dataset Deduplication Benchmark"
+echo "fastdedup Benchmark"
 echo "=========================================="
 echo ""
 
@@ -46,9 +46,9 @@ time python3 benchmarks/baselines/streaming_dedup.py \
 echo ""
 
 echo "=========================================="
-echo "4. Rust Dataset-Dedup (YOUR TOOL)"
+echo "4. Rust fastdedup (YOUR TOOL)"
 echo "=========================================="
-time cargo run --release --package dataset-dedup-cli -- exact-dedup \
+time cargo run --release --package fastdedup-cli -- exact-dedup \
     --input "$INPUT_FILE" \
     --output "$OUTPUT_DIR/rust_output.parquet" \
     --field text

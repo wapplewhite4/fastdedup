@@ -12,9 +12,9 @@ use std::time::Instant;
 
 use rayon::prelude::*;
 
-use dataset_dedup_core::exact_dedup::{ExactDeduplicator, HashStrategy};
-use dataset_dedup_core::fuzzy_dedup::{FuzzyDeduplicator, FuzzyDedupConfig};
-use dataset_dedup_formats::{open_dataset, ParquetWriter};
+use fastdedup_core::exact_dedup::{ExactDeduplicator, HashStrategy};
+use fastdedup_core::fuzzy_dedup::{FuzzyDeduplicator, FuzzyDedupConfig};
+use fastdedup_formats::{open_dataset, ParquetWriter};
 
 use super::{ProgressMsg, RunResults};
 

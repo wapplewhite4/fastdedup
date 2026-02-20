@@ -1,12 +1,12 @@
-use dataset_dedup_core::exact_dedup::{ExactDeduplicator, HashStrategy};
-use dataset_dedup_core::fuzzy_dedup::FuzzyDeduplicator;
-use dataset_dedup_filters::text_preprocessing::TextNormalizer;
+use fastdedup_core::exact_dedup::{ExactDeduplicator, HashStrategy};
+use fastdedup_core::fuzzy_dedup::FuzzyDeduplicator;
+use fastdedup_filters::text_preprocessing::TextNormalizer;
 use serde_json::{json, Value};
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🔍 Dataset Deduplication Tool\n");
+    println!("🔍 fastdedup\n");
 
     // Configuration
     let input_file = std::env::args()

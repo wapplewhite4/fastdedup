@@ -1,5 +1,5 @@
 [package]
-name = "dataset-dedup-formats"
+name = "fastdedup-formats"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

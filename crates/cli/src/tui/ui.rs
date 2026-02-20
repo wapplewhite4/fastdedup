@@ -38,7 +38,7 @@ fn render_config(f: &mut Frame, app: &App) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(ACCENT))
         .title(Span::styled(
-            " dataset-dedup TUI ",
+            " fastdedup TUI ",
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         ));
     f.render_widget(outer, area);
