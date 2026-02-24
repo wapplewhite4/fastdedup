@@ -62,7 +62,7 @@ Fuzzy dedup removes near-duplicate records using MinHash + LSH. This is signific
 | Wall clock | **36:44** | 3h50m+ (stage 1 only, terminated) |
 | Peak RAM | 23 GB | 1.1 GB |
 | CPU cores used | ~5.5 | 1 |
-| Completed | ✅ | ❌ |
+| Completed | Y | N |
 | Duplicates removed | 105,044 (0.7%) | — |
 
 datatrove did not complete. After 3 hours and 50 minutes, stage 1 (MinHash signature computation) was still running and we terminated it. Stages 2 (bucket clustering) and 3 (filtering) had not started.
